@@ -82,7 +82,6 @@ The destination is decided by env vars:
 |---|---|---|
 | `CATALYST_OTLP_TOKEN` | *(unset)* | If set, uploads to Catalyst over OTLP. If unset, writes JSONL locally. |
 | `CATALYST_OTLP_ENDPOINT` | catalyst-tracing default | OTLP endpoint **base URL** (e.g. `https://telemetry.inference.net`). catalyst-tracing appends `/v1/traces` automatically — do **not** include the path, or you'll get a `.../v1/traces/v1/traces` 404 and silently no traces. |
-| `CATALYST_SERVICE_VERSION` | installed `halo-engine` version | Service version stamped on traces. Defaults to the package version reported by `importlib.metadata` (`"unknown"` on un-installed source checkouts). |
 | `CATALYST_DEBUG` | *(unset)* | Set to `1` to surface OTLP export errors at WARNING level. Useful for troubleshooting "no errors, no traces" — the default `BatchSpanProcessor` swallows export failures. |
 | `CATALYST_TRACING_RUN_ID` | *(unset)* | When set, becomes the HALO run id (and the `halo.run.id` resource attribute) instead of a generated uuid. Lets a launching system (typically Catalyst) keep its own bookkeeping in sync with HALO's traces. |
 | `CATALYST_TRACING_*` | *(unset)* | Generic passthrough — see below. |
