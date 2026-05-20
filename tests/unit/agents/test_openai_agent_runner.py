@@ -146,6 +146,64 @@ async def test_runner_retries_refusal_without_emitting_refusal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_keeps_refusal_retry_prompt_after_transient_retry_call_failure() -> None:
+    bus = EngineOutputBus()
+    ctx = _context()
+    execution = AgentExecution(
+        agent_id="root",
+        agent_name="root",
+        depth=0,
+        parent_agent_id=None,
+        parent_tool_call_id=None,
+    )
+    fake_request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    calls: list[list[dict]] = []
+
+    async def fake_run_streamed(*, agent, input, context):
+        calls.append(input)
+        if len(calls) == 1:
+            return _FakeStream(
+                [_refusal_event("I'm sorry, but I cannot assist with that request.")]
+            )
+        if len(calls) == 2:
+            raise APIConnectionError(request=fake_request)
+        return _FakeStream([_assistant_event("answer\n<final/>")])
+
+    async def noop_compactor(_):
+        return ""
+
+    runner = OpenAiAgentRunner(
+        run_streamed=fake_run_streamed,
+        compactor_factory=lambda _: noop_compactor,
+        refusal_retries=1,
+    )
+
+    await runner.run(
+        sdk_agent=object(),
+        agent_context=ctx,
+        agent_execution=execution,
+        output_bus=bus,
+        is_root=True,
+    )
+
+    await bus.close()
+    events = [e async for e in bus.stream()]
+    retry_message = {
+        "role": "user",
+        "content": (
+            "The previous model response was a refusal. Retry the request using the "
+            "available context and tools. If you can answer, provide the final answer "
+            "and end it with <final/>."
+        ),
+    }
+    assert len(calls) == 3
+    assert calls[1] == [retry_message]
+    assert calls[2] == [retry_message]
+    assert len(events) == 1
+    assert events[0].item.content == "answer"
+
+
+@pytest.mark.asyncio
 async def test_runner_does_not_retry_when_refusal_is_not_last_message() -> None:
     bus = EngineOutputBus()
     ctx = _context()

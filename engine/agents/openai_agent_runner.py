@@ -127,11 +127,11 @@ class OpenAiAgentRunner:
             messages = [m.model_dump(exclude_none=True) for m in agent_context.to_messages_array()]
             if pending_refusal_retry:
                 messages.append(_refusal_retry_message(is_root=is_root))
-                pending_refusal_retry = False
             try:
                 stream = await self._run_streamed(
                     agent=sdk_agent, input=messages, context=run_context
                 )
+                pending_refusal_retry = False
                 async for raw_event in stream.stream_events():
                     events_seen += 1
                     mapped = self._mapper.to_mapped_event(
