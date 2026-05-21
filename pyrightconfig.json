@@ -12,7 +12,7 @@
   "pythonVersion": "3.10",
   "venvPath": ".",
   "venv": ".venv",
-  "typeCheckingMode": "basic",
+  "typeCheckingMode": "standard",
   "reportMissingTypeStubs": false,
   "executionEnvironments": [
     {
