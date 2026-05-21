@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem
 from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent, StreamEvent
+from openai.types.responses import ResponseOutputRefusal, ResponseOutputText
 
 from engine.agents.agent_context_items import AgentContextItem
 from engine.agents.agent_execution import AgentExecution
@@ -90,13 +91,9 @@ class OpenAiEventMapper:
     ) -> MappedEvent:
         """Build the assistant ``AgentMessage`` from a ``ResponseOutputMessage`` and detect ``<final/>``."""
         raw_item = item.raw_item
-        item_id = str(getattr(raw_item, "id", "") or "")
-        parts = getattr(raw_item, "content", None) or []
-        text = "".join(
-            getattr(p, "text", "")
-            for p in parts
-            if getattr(p, "type", None) in ("output_text", "text")
-        )
+        item_id = raw_item.id
+        parts = raw_item.content
+        text = "".join(part.text for part in parts if isinstance(part, ResponseOutputText))
         refusal_text = _extract_refusal_text(parts=parts, text=text)
         if refusal_text is not None:
             return MappedEvent(refusal_text=refusal_text)
@@ -243,11 +240,13 @@ _TEXT_REFUSAL_PREFIXES = (
 )
 
 
-def _extract_refusal_text(*, parts: list[object], text: str) -> str | None:
+def _extract_refusal_text(
+    *, parts: list[ResponseOutputText | ResponseOutputRefusal], text: str
+) -> str | None:
     refusal_parts = [
-        str(getattr(part, "refusal", "")).strip()
+        part.refusal.strip()
         for part in parts
-        if getattr(part, "type", None) == "refusal" and str(getattr(part, "refusal", "")).strip()
+        if isinstance(part, ResponseOutputRefusal) and part.refusal.strip()
     ]
     if refusal_parts:
         return "\n".join(refusal_parts)
