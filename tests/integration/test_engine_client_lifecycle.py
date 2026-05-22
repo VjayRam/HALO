@@ -12,6 +12,7 @@ from engine.agents.agent_config import AgentConfig
 from engine.agents.agent_context_items import AgentContextItem
 from engine.engine_config import EngineConfig
 from engine.model_config import ModelConfig
+from engine.model_provider_config import ModelProviderConfig
 from engine.models.messages import AgentMessage
 from tests._sdk_events import assistant_message_event
 from tests.probes.probe_kit import FakeRunner
@@ -52,37 +53,25 @@ def _config() -> EngineConfig:
 class _StubAsyncOpenAI:
     """Stand-in for ``AsyncOpenAI`` that records ``close()`` calls."""
 
-    def __init__(
-        self,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        default_headers: dict[str, str] | None = None,
-    ) -> None:
-        del base_url, api_key, default_headers
+    def __init__(self) -> None:
         self.close = AsyncMock()
 
 
 def _install_stub_client(monkeypatch: pytest.MonkeyPatch) -> _StubAsyncOpenAI:
-    """Patch ``engine.main.AsyncOpenAI`` to return a fresh stub and short-circuit
-    ``set_default_openai_client``. Returns the stub so the test can assert on
-    ``close`` lifecycle."""
+    """Patch ``engine.main.build_async_openai_client`` to return a fresh stub and
+    short-circuit ``install_default_sdk_client``. Returns the stub so the test
+    can assert on ``close`` lifecycle."""
     stub_client = _StubAsyncOpenAI()
 
-    def _build_stub(
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        default_headers: dict[str, str] | None = None,
-    ) -> _StubAsyncOpenAI:
-        del base_url, api_key, default_headers
+    def _build_stub(provider_config: ModelProviderConfig) -> _StubAsyncOpenAI:
+        del provider_config
         return stub_client
 
-    def _noop_set_default(client: object, *, use_for_tracing: bool) -> None:
-        del client, use_for_tracing
+    def _noop_install_default(client: object) -> None:
+        del client
 
-    monkeypatch.setattr(engine_main, "AsyncOpenAI", _build_stub)
-    monkeypatch.setattr(engine_main, "set_default_openai_client", _noop_set_default)
+    monkeypatch.setattr(engine_main, "build_async_openai_client", _build_stub)
+    monkeypatch.setattr(engine_main, "install_default_sdk_client", _noop_install_default)
     return stub_client
 
 

@@ -14,6 +14,7 @@ from engine.agents.agent_context_items import AgentContextItem
 from engine.engine_config import EngineConfig
 from engine.main import _drive_sync
 from engine.model_config import ModelConfig
+from engine.model_provider_config import ModelProviderConfig
 from engine.models.messages import AgentMessage
 from tests._sdk_events import assistant_message_event
 from tests.probes.probe_kit import FakeRunner
@@ -126,47 +127,36 @@ def _config() -> EngineConfig:
 
 
 @pytest.mark.asyncio
-async def test_engine_installs_sdk_default_with_tracing_disabled(
+async def test_engine_installs_sdk_default_via_boundary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     fixtures_dir: Path,
 ) -> None:
-    """Engine must bind the SDK's process-global client with use_for_tracing=False."""
+    """Engine must route the SDK default-client install through the boundary
+    helper ``install_default_sdk_client`` (which pins ``use_for_tracing=False``;
+    verified in ``test_openai_sdk_client.py``)."""
     trace_path = tmp_path / "traces.jsonl"
     trace_path.write_bytes((fixtures_dir / "tiny_traces.jsonl").read_bytes())
 
-    set_default_calls: list[tuple[object, dict[str, object]]] = []
+    install_calls: list[object] = []
 
     class _StubAsyncOpenAI:
-        def __init__(
-            self,
-            *,
-            base_url: str | None = None,
-            api_key: str | None = None,
-            default_headers: dict[str, str] | None = None,
-        ) -> None:
-            del base_url, api_key, default_headers
+        def __init__(self) -> None:
             self.close = AsyncMock()
 
     stub_client_instance: _StubAsyncOpenAI | None = None
 
-    def _capture_client(
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        default_headers: dict[str, str] | None = None,
-    ) -> _StubAsyncOpenAI:
+    def _capture_client(provider_config: ModelProviderConfig) -> _StubAsyncOpenAI:
+        del provider_config
         nonlocal stub_client_instance
-        stub_client_instance = _StubAsyncOpenAI(
-            base_url=base_url, api_key=api_key, default_headers=default_headers
-        )
+        stub_client_instance = _StubAsyncOpenAI()
         return stub_client_instance
 
-    def _record_set_default(client: object, *, use_for_tracing: bool) -> None:
-        set_default_calls.append((client, {"use_for_tracing": use_for_tracing}))
+    def _record_install_default(client: object) -> None:
+        install_calls.append(client)
 
-    monkeypatch.setattr(engine_main, "AsyncOpenAI", _capture_client)
-    monkeypatch.setattr(engine_main, "set_default_openai_client", _record_set_default)
+    monkeypatch.setattr(engine_main, "build_async_openai_client", _capture_client)
+    monkeypatch.setattr(engine_main, "install_default_sdk_client", _record_install_default)
     monkeypatch.setattr(agent_context_module, "compact", _noop_compact)
 
     runner = FakeRunner([_assistant_text("Final.\n<final/>")])
@@ -176,7 +166,5 @@ async def test_engine_installs_sdk_default_with_tracing_disabled(
         [AgentMessage(role="user", content="hi")], _config(), trace_path
     )
 
-    assert len(set_default_calls) == 1
-    client_arg, kwargs = set_default_calls[0]
-    assert client_arg is stub_client_instance
-    assert kwargs == {"use_for_tracing": False}
+    assert len(install_calls) == 1
+    assert install_calls[0] is stub_client_instance
