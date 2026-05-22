@@ -73,3 +73,26 @@ def test_omit_is_reexported_openai_sentinel() -> None:
     from openai import omit as openai_omit
 
     assert omit is openai_omit
+
+
+def test_install_default_sdk_client_pins_use_for_tracing_false(monkeypatch) -> None:
+    """The helper must always pin ``use_for_tracing=False`` — HALO owns its own
+    tracing pipeline and letting the SDK redirect tracing would duplicate exports.
+    """
+    from openai import AsyncOpenAI
+
+    from engine.agents import openai_sdk_client
+
+    received: dict[str, object] = {}
+
+    def fake_set_default(client, *, use_for_tracing) -> None:
+        received["client"] = client
+        received["use_for_tracing"] = use_for_tracing
+
+    monkeypatch.setattr(openai_sdk_client, "set_default_openai_client", fake_set_default)
+
+    client = AsyncOpenAI(api_key="sk-test")
+    openai_sdk_client.install_default_sdk_client(client)
+
+    assert received["client"] is client
+    assert received["use_for_tracing"] is False
