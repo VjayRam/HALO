@@ -55,6 +55,8 @@ def _parse_headers(values: list[str] | None) -> dict[str, str] | None:
 def _make_config(
     *,
     model: str,
+    synthesis_model: str | None,
+    compaction_model: str | None,
     max_depth: int,
     max_turns: int,
     max_parallel: int,
@@ -67,9 +69,9 @@ def _make_config(
     api_key: str | None,
     default_headers: dict[str, str] | None,
 ) -> EngineConfig:
-    def make_model_config(reasoning_effort: ReasoningEffort | None) -> ModelConfig:
+    def make_model_config(name: str, reasoning_effort: ReasoningEffort | None) -> ModelConfig:
         return ModelConfig(
-            name=model,
+            name=name,
             temperature=temperature,
             maximum_output_tokens=max_output_tokens,
             parallel_tool_calls=parallel_tool_calls,
@@ -78,10 +80,13 @@ def _make_config(
 
     # One ModelConfig per role so each is independently tunable. Compaction
     # intentionally skips reasoning_effort — it's a deterministic summarizer.
-    root_model = make_model_config(reasoning_effort)
-    subagent_model = make_model_config(reasoning_effort)
-    synthesis_model = make_model_config(reasoning_effort)
-    compaction_model = make_model_config(None)
+    # Synthesis / compaction fall back to the agent model (never a hardcoded
+    # name) so a plain --model run stays on one provider; --synthesis-model /
+    # --compaction-model point them at a cheaper model.
+    root_model = make_model_config(model, reasoning_effort)
+    subagent_model = make_model_config(model, reasoning_effort)
+    synthesis = make_model_config(synthesis_model or model, reasoning_effort)
+    compaction = make_model_config(compaction_model or model, None)
 
     root_agent = AgentConfig(
         name="root",
@@ -99,8 +104,8 @@ def _make_config(
     return EngineConfig(
         root_agent=root_agent,
         subagent=subagent,
-        synthesis_model=synthesis_model,
-        compaction_model=compaction_model,
+        synthesis_model=synthesis,
+        compaction_model=compaction,
         model_provider=ModelProviderConfig(
             base_url=base_url,
             api_key=api_key,
@@ -136,6 +141,25 @@ def _run(
         ..., "--prompt", "-p", help="User prompt to send to the root agent."
     ),
     model: str = typer.Option("gpt-5.4-mini", "--model", "-m"),
+    synthesis_model: str | None = typer.Option(
+        None,
+        "--synthesis-model",
+        help=(
+            "Model for synthesis calls (trace summarization). Defaults to "
+            "--model. A small, cheap model your provider serves (e.g. "
+            "gpt-4.1-nano on OpenAI) is recommended."
+        ),
+    ),
+    compaction_model: str | None = typer.Option(
+        None,
+        "--compaction-model",
+        help=(
+            "Model for compaction calls (context summarization) — the "
+            "biggest token consumer in large runs. Defaults to --model. "
+            "A small, cheap model your provider serves (e.g. gpt-4.1-nano "
+            "on OpenAI) is recommended."
+        ),
+    ),
     max_depth: int = typer.Option(2, "--max-depth", min=0),
     max_turns: int = typer.Option(20, "--max-turns", min=1),
     max_parallel: int = typer.Option(10, "--max-parallel", min=1),
@@ -213,6 +237,8 @@ def _run(
         raise typer.Exit(1)
     cfg = _make_config(
         model=model,
+        synthesis_model=synthesis_model,
+        compaction_model=compaction_model,
         max_depth=max_depth,
         max_turns=max_turns,
         max_parallel=max_parallel,

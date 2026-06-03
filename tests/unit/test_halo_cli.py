@@ -22,6 +22,8 @@ def test_help_exposes_provider_and_model_flags_without_no_telemetry() -> None:
     assert "--default-header" not in result.output
     assert "--temperature" in result.output
     assert "--max-output-tokens" in result.output
+    assert "--synthesis-model" in result.output
+    assert "--compaction-model" in result.output
     assert "--parallel-tool-calls / --no-parallel-tool-calls" in result.output
     assert "--telemetry" in result.output
     assert "--no-telemetry" not in result.output
@@ -30,6 +32,8 @@ def test_help_exposes_provider_and_model_flags_without_no_telemetry() -> None:
 def test_make_config_threads_cli_options_into_engine_config() -> None:
     cfg = _make_config(
         model="claude-opus-4-7",
+        synthesis_model=None,
+        compaction_model=None,
         max_depth=3,
         max_turns=12,
         max_parallel=5,
@@ -65,6 +69,30 @@ def test_make_config_threads_cli_options_into_engine_config() -> None:
     assert cfg.compaction_model.maximum_output_tokens == 1024
     assert cfg.compaction_model.parallel_tool_calls is False
     assert cfg.compaction_model.reasoning_effort is None
+
+
+def test_make_config_overrides_synthesis_and_compaction_models() -> None:
+    cfg = _make_config(
+        model="claude-opus-4-7",
+        synthesis_model="claude-haiku-4-5",
+        compaction_model="claude-haiku-4-5",
+        max_depth=3,
+        max_turns=12,
+        max_parallel=5,
+        temperature=None,
+        max_output_tokens=None,
+        parallel_tool_calls=True,
+        reasoning_effort=None,
+        refusal_retries=0,
+        base_url=None,
+        api_key=None,
+        default_headers=None,
+    )
+
+    assert cfg.root_agent.model.name == "claude-opus-4-7"
+    assert cfg.subagent.model.name == "claude-opus-4-7"
+    assert cfg.synthesis_model.name == "claude-haiku-4-5"
+    assert cfg.compaction_model.name == "claude-haiku-4-5"
 
 
 def test_cli_leaves_provider_fields_unset_for_openai_env_fallback(
