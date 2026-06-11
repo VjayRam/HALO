@@ -58,8 +58,45 @@ export type DesktopAppMetadata = {
 export type DesktopRowContextMenuInput = {
   id: string;
   kind: "session" | "trace";
+  /** Display name of the import source ("Langfuse", "Phoenix") for sourceUrl. */
+  sourceName?: string | null;
   sourceUrl?: string | null;
 };
+
+export type CodingTool = "claude-code" | "codex" | "cursor";
+
+export type CodingToolAvailability = Record<CodingTool, boolean>;
+
+/**
+ * Short prompt sent into the coding tool. Reports routinely exceed every
+ * tool's URL length limit (Cursor 8k, Claude Code 5k), so the prompt
+ * references the markdown report on disk instead of inlining it.
+ */
+export function buildCodingToolPrompt(reportPath: string) {
+  return (
+    `Read the HALO trace-analysis report at ${reportPath} and act on its findings ` +
+    `in this codebase: fix the identified failures and implement the recommended improvements.`
+  );
+}
+
+/**
+ * Deep links verified against vendor docs:
+ * - Cursor: cursor://anysphere.cursor-deeplink/prompt?text=… (prefills chat)
+ * - Claude Code: claude-cli://open?q=… (opens a terminal with the prompt prefilled)
+ * - Codex: codex://new?prompt=… (prefills the Codex app composer)
+ * None of them auto-run; the user confirms inside the tool.
+ */
+export function buildCodingToolDeepLink(tool: CodingTool, reportPath: string) {
+  const prompt = encodeURIComponent(buildCodingToolPrompt(reportPath));
+  switch (tool) {
+    case "cursor":
+      return `cursor://anysphere.cursor-deeplink/prompt?text=${prompt}`;
+    case "claude-code":
+      return `claude-cli://open?q=${prompt}`;
+    case "codex":
+      return `codex://new?prompt=${prompt}`;
+  }
+}
 
 export type HaloDesktopRPCSchema = {
   bun: {
@@ -67,6 +104,10 @@ export type HaloDesktopRPCSchema = {
       checkForUpdates: {
         params: undefined;
         response: DesktopNativeStatus;
+      };
+      detectCodingTools: {
+        params: undefined;
+        response: CodingToolAvailability;
       };
       getAppMetadata: {
         params: undefined;
@@ -164,9 +205,9 @@ export const commandPaletteItems: CommandPaletteItem[] = [
   },
   {
     command: "import-data",
-    description: "Import historical traces from Langfuse.",
+    description: "Import historical traces from Langfuse or Phoenix.",
     group: "Data",
-    keywords: ["langfuse", "import", "data"],
+    keywords: ["langfuse", "phoenix", "arize", "import", "data"],
     label: "Import Data",
     shortcut: "⇧⌘I",
   },

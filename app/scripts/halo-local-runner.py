@@ -70,7 +70,15 @@ async def run(config: dict[str, Any]) -> None:
         maximum_parallel_subagents=int(config.get("maxParallel", 2)),
     )
 
-    messages = [AgentMessage(role="user", content=config["prompt"])]
+    raw_messages = config.get("messages")
+    if isinstance(raw_messages, list) and raw_messages:
+        messages = [
+            AgentMessage(role=item["role"], content=item.get("content") or "")
+            for item in raw_messages
+            if isinstance(item, dict) and item.get("role")
+        ]
+    else:
+        messages = [AgentMessage(role="user", content=config["prompt"])]
     emit("started", {"runId": config["runId"]})
 
     final_answer: str | None = None

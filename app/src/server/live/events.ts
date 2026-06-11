@@ -48,6 +48,8 @@ export type TelemetryChangedPayload = {
 export type ImportJobSnapshot = {
   id: string;
   bunqueueJobId: string | null;
+  /** Which import integration produced this job. Defaults to Langfuse. */
+  provider?: "langfuse" | "phoenix";
   connectionId: string;
   connectionName?: string | null;
   currentTraceId: string | null;

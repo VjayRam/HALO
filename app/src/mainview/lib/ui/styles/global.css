@@ -22,6 +22,13 @@
   border-color: color-mix(in srgb, var(--color-border) 50%, transparent);
 }
 
+/* Companion to border-subtle for divide-y/divide-x stacks. */
+@utility divide-subtle {
+  & > :not(:last-child) {
+    border-color: color-mix(in srgb, var(--color-border) 50%, transparent);
+  }
+}
+
 @utility container {
   margin-inline: auto;
   padding-inline: 2rem;

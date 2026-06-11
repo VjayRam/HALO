@@ -1,28 +1,16 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { AnalysisPage } from "~/halo/HaloPages";
+import { AnalysisPage } from "~/halo/AnalysisPage";
 
 export const Route = createFileRoute("/analysis")({
-  component: AnalysisRoute,
-  validateSearch: (search) => ({
-    runId: typeof search.runId === "string" ? search.runId : undefined,
-  }),
+  component: AnalysisPage,
+  validateSearch: (search): { runId?: string } =>
+    // Legacy deep links used ?runId=<id>; the detail view is a path now.
+    typeof search.runId === "string" ? { runId: search.runId } : {},
+  beforeLoad: ({ search }) => {
+    if (search.runId) {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      throw redirect({ params: { runId: search.runId }, to: "/analysis/$runId" });
+    }
+  },
 });
-
-function AnalysisRoute() {
-  const navigate = Route.useNavigate();
-  const search = Route.useSearch();
-
-  return (
-    <AnalysisPage
-      onSelectRun={(runId) => {
-        void navigate({
-          search: {
-            runId: runId ?? undefined,
-          },
-        });
-      }}
-      selectedRunId={search.runId}
-    />
-  );
-}

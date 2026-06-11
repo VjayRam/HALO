@@ -1,4 +1,5 @@
 import type {
+  CodingToolAvailability,
   DesktopAppMetadata,
   DesktopCommand,
   DesktopNativeStatus,
@@ -13,6 +14,7 @@ export const TRACE_PAGE_COMMAND_EVENT = "halo:trace-page-command";
 type DesktopRpc = {
   request: {
     checkForUpdates: () => Promise<DesktopNativeStatus>;
+    detectCodingTools: () => Promise<CodingToolAvailability>;
     getAppMetadata: () => Promise<DesktopAppMetadata>;
     openAppDataFolder: () => Promise<{ ok: boolean }>;
     openExternal: (params: { url: string }) => Promise<{ ok: boolean }>;
@@ -99,6 +101,31 @@ export async function showDesktopRowContextMenu(
   if (!rpc) return false;
   try {
     return (await rpc.request.showRowContextMenu(input)).ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Null outside the desktop shell (plain browser dev). */
+export async function detectInstalledCodingTools(): Promise<CodingToolAvailability | null> {
+  const rpc = await getDesktopRpc();
+  if (!rpc) return null;
+  try {
+    return await rpc.request.detectCodingTools();
+  } catch {
+    return null;
+  }
+}
+
+export async function openExternalUrl(url: string) {
+  const rpc = await getDesktopRpc();
+  if (!rpc) {
+    // Browser dev fallback — the browser will ask before opening the scheme.
+    window.open(url, "_blank");
+    return true;
+  }
+  try {
+    return (await rpc.request.openExternal({ url })).ok;
   } catch {
     return false;
   }

@@ -69,6 +69,25 @@
   animation: live-timeline-pulse 1.4s ease-out;
 }
 
+/* Streamed markdown materializes: each block fades in as it mounts, so new
+   paragraphs/bullets appear softly instead of popping. Reused nodes never
+   re-animate. */
+@utility stream-block-fade {
+  & :is(p, li, h1, h2, h3, h4, pre, table, blockquote) {
+    animation: halo-turn-fade-in 0.35s ease-out both;
+  }
+}
+
+/* Opacity-only and quick: log rows appear during auto-scroll, so any
+   translate makes the list feel wobbly. */
+@utility log-row-fade {
+  animation: halo-log-row-in 0.2s ease-out both;
+}
+
+@utility turn-fade-in {
+  animation: halo-turn-fade-in 0.45s ease-out both;
+}
+
 .halo-startup-shell {
   position: relative;
   min-height: 100vh;
@@ -191,12 +210,37 @@
   }
 }
 
+@keyframes halo-turn-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes halo-log-row-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .halo-startup-content,
   .halo-startup-content-entering,
   .halo-startup-content-visible,
   .halo-react-splash,
-  .halo-react-splash-logo {
+  .halo-react-splash-logo,
+  .turn-fade-in,
+  .log-row-fade,
+  .stream-block-fade :is(p, li, h1, h2, h3, h4, pre, table, blockquote) {
     animation: none;
     opacity: 1;
     transform: none;

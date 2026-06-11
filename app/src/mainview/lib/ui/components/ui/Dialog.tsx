@@ -60,7 +60,7 @@ const DialogContent = React.forwardRef<
           className={cn(
             `
               relative z-50 flex h-full max-h-screen w-full flex-col border
-              bg-background shadow-lg duration-200
+              border-subtle bg-background shadow-lg duration-200
 
               data-[state=closed]:animate-out data-[state=closed]:fade-out-0
               data-[state=closed]:zoom-out-95
@@ -123,8 +123,8 @@ const DialogHeader = ({
   <div
     className={cn(
       `
-        flex flex-col space-y-2 rounded-t-xl border-b bg-background p-6
-        text-center
+        flex flex-col space-y-2 rounded-t-xl border-b border-subtle
+        bg-background p-6 text-center
 
         sm:text-left
       `,
@@ -140,7 +140,7 @@ const DialogFooter = ({
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
-    className={cn(`flex flex-row space-x-2 border-t p-6`, className)}
+    className={cn(`flex flex-row space-x-2 border-t border-subtle p-6`, className)}
     {...props}
   />
 );

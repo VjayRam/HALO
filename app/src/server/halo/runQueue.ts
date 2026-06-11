@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Bunqueue, type Job } from "bunqueue/client";
@@ -6,22 +6,32 @@ import type { DatabaseHandle } from "../db/client";
 import type { LiveEventStore } from "../live/events";
 import { exportHaloTraceJsonl, previewHaloRunExport } from "./exporter";
 import { getHaloEngineStatus, installOrUpdateHaloEngine } from "./engine";
+import { ensureHaloReportFile, outputDirForRun } from "./report";
 import {
   addHaloRunEvent,
+  appendHaloRunTurns,
+  buildRunnerMessages,
   createHaloRun,
+  createHaloRunTurns,
+  deleteHaloRun,
+  getAssistantTurn,
   getHaloProvider,
   getHaloRun,
+  getLatestAssistantTurn,
   isHaloRunCancelled,
   listHaloRuns,
   markInterruptedHaloRuns,
   publishHaloRun,
   publishHaloRunEvent,
   updateHaloRun,
+  updateHaloRunTurn,
 } from "./storage";
 import type { HaloRun, StartHaloRunInput } from "./types";
 
 type HaloJobData = {
   runId: string;
+  /** Assistant turn this job produces; absent on legacy/first-turn jobs (= 1). */
+  turnIndex?: number;
 };
 
 type HaloJobResult = {
@@ -33,6 +43,14 @@ export type HaloRunService = ReturnType<typeof createHaloRunService>;
 
 const HALO_QUEUE_NAME = "halo-runs";
 const HALO_ROUTE = "halo.run";
+// Engine turns routinely run for minutes. bunqueue's default lock is 30s —
+// if it expires mid-job, the post-handler ack throws "Invalid or expired
+// lock token" as an unhandled rejection (observed killing the process,
+// June 2026). The lock duration isn't configurable via BunqueueOptions, so
+// renew aggressively instead: a fast worker heartbeat plus an explicit
+// 10-minute extension on a 20s cadence while a turn runs.
+const HALO_LOCK_EXTENSION_MS = 10 * 60 * 1000;
+const HALO_LOCK_RENEW_INTERVAL_MS = 20_000;
 
 export function createHaloRunService(options: {
   database: DatabaseHandle;
@@ -45,6 +63,7 @@ export function createHaloRunService(options: {
   queue = new Bunqueue<HaloJobData, HaloJobResult>(HALO_QUEUE_NAME, {
     concurrency: 1,
     dataPath: queueDataPath(database.path),
+    heartbeatInterval: 2_000,
     defaultJobOptions: {
       durable: true,
       removeOnComplete: { count: 200 },
@@ -80,6 +99,7 @@ export function createHaloRunService(options: {
       progress: Math.max(run.progress, 95),
       status: "failed",
     });
+    settleActiveAssistantTurn(database, run.id, "failed", error.message);
     publishHaloRun(live, failed);
   });
 
@@ -92,6 +112,7 @@ export function createHaloRunService(options: {
         finishedAt: Date.now(),
         status: "cancelled",
       });
+      settleActiveAssistantTurn(database, runId, "cancelled", "HALO run cancelled by user.");
       addAndPublishEvent(database, live, updated, "cancelled", {
         error: "HALO run cancelled by user.",
       });
@@ -102,6 +123,57 @@ export function createHaloRunService(options: {
 
     close(force?: boolean) {
       return queue.close(force);
+    },
+
+    /** Ask a follow-up on a finished run: appends turns and re-enqueues. */
+    async continueRun(runId: string, message: string) {
+      const run = getHaloRun(database.sqlite, runId);
+      if (!run) return null;
+      if (!["completed", "incomplete", "failed", "cancelled", "interrupted"].includes(run.status)) {
+        throw new Error("Wait for the current HALO turn to finish first.");
+      }
+      const trimmed = message.trim();
+      if (!trimmed) throw new Error("Follow-up message is empty.");
+      const { assistantTurn } = appendHaloRunTurns(database.sqlite, run, trimmed);
+      const queued = await queue.add(
+        HALO_ROUTE,
+        { runId, turnIndex: assistantTurn.turnIndex },
+        {
+          durable: true,
+          jobId: `${runId}:turn:${assistantTurn.turnIndex}`,
+          priority: 5,
+        },
+      );
+      const updated = updateHaloRun(database.sqlite, runId, {
+        bunqueueJobId: queued.id,
+        errorMessage: null,
+        finishedAt: null,
+        progress: 0,
+        status: "queued",
+      });
+      addAndPublishEvent(
+        database,
+        live,
+        updated,
+        "queued",
+        { targetType: updated.targetType, turnIndex: assistantTurn.turnIndex },
+        assistantTurn.turnIndex,
+      );
+      publishHaloRun(live, updated);
+      return updated;
+    },
+
+    async delete(runId: string) {
+      const run = getHaloRun(database.sqlite, runId);
+      if (!run) return false;
+      if (run.bunqueueJobId) queue.cancel(run.bunqueueJobId);
+      deleteHaloRun(database.sqlite, runId);
+      try {
+        rmSync(outputDirForRun(database.path, runId), { force: true, recursive: true });
+      } catch {
+        // Leftover files are harmless; the run rows are gone.
+      }
+      return true;
     },
 
     get(runId: string) {
@@ -119,9 +191,18 @@ export function createHaloRunService(options: {
     async retry(runId: string) {
       const run = getHaloRun(database.sqlite, runId);
       if (!run) return null;
+      // Re-run the most recent assistant turn (1 for legacy single-turn runs).
+      const latestTurn = getLatestAssistantTurn(database.sqlite, runId);
+      if (latestTurn) {
+        updateHaloRunTurn(database.sqlite, latestTurn.id, {
+          errorMessage: null,
+          finishedAt: null,
+          status: "pending",
+        });
+      }
       const queued = await queue.add(
         HALO_ROUTE,
-        { runId },
+        { runId, turnIndex: latestTurn?.turnIndex ?? 1 },
         {
           durable: true,
           jobId: `${runId}:${Date.now()}`,
@@ -151,6 +232,7 @@ export function createHaloRunService(options: {
           input.title?.trim() ||
           `${input.targetType === "session_group" ? "Session" : "Trace"} analysis`,
       });
+      createHaloRunTurns(database.sqlite, run);
       const queued = await queue.add(
         HALO_ROUTE,
         { runId: run.id },
@@ -174,6 +256,26 @@ export function createHaloRunService(options: {
 }
 
 async function processHaloRun(input: {
+  database: DatabaseHandle;
+  job: Job<HaloJobData>;
+  live: LiveEventStore;
+  queue: Bunqueue<HaloJobData, HaloJobResult>;
+}): Promise<HaloJobResult> {
+  // Belt and suspenders alongside the worker heartbeat: keep extending the
+  // job lock for as long as the turn runs so the completion ack can't hit an
+  // expired token.
+  const lockRenewal = setInterval(() => {
+    void renewJobLock(input.job);
+  }, HALO_LOCK_RENEW_INTERVAL_MS);
+  void renewJobLock(input.job);
+  try {
+    return await processHaloRunLocked(input);
+  } finally {
+    clearInterval(lockRenewal);
+  }
+}
+
+async function processHaloRunLocked(input: {
   database: DatabaseHandle;
   job: Job<HaloJobData>;
   live: LiveEventStore;
@@ -225,58 +327,88 @@ async function processHaloRun(input: {
   const outputDir = outputDirForRun(database.path, run.id);
   mkdirSync(outputDir, { recursive: true });
 
-  run = updateHaloRun(database.sqlite, runId, {
-    progress: 5,
-    status: "exporting",
-  });
-  publishHaloRun(live, run);
-  addAndPublishEvent(database, live, run, "exporting", {
-    targetType: run.targetType,
-  });
+  const turnIndex = job.data.turnIndex ?? 1;
+  // Follow-up turns reuse the run's original trace export when it still
+  // exists; otherwise fall through to a fresh export.
+  const reuseExport =
+    turnIndex > 1 && Boolean(run.exportPath) && existsSync(run.exportPath ?? "");
+  let tracePath = run.exportPath ?? "";
 
-  if (isCancelled(database, runId, signal)) {
-    await markCancelled(database, live, runId);
-    return { cancelled: true, runId };
-  }
-
-  const exported = exportHaloTraceJsonl(database.sqlite, {
-    filters: run.filters,
-    outputDir,
-    runId,
-    targetType: run.targetType,
-  });
-  run = updateHaloRun(database.sqlite, runId, {
-    exportPath: exported.path,
-    progress: 18,
-    sessionCount: exported.sessionCount,
-    spanCount: exported.spanCount,
-    traceCount: exported.traceCount,
-  });
-  publishHaloRun(live, run);
-  addAndPublishEvent(database, live, run, "exported", {
-    path: exported.path,
-    sessionCount: exported.sessionCount,
-    spanCount: exported.spanCount,
-    traceCount: exported.traceCount,
-    warnings: exported.warnings,
-  });
-
-  if (exported.spanCount === 0 || exported.traceCount === 0) {
+  if (!reuseExport) {
     run = updateHaloRun(database.sqlite, runId, {
-      errorMessage: "No traces matched the selected HALO filters.",
-      finishedAt: Date.now(),
-      progress: 100,
-      status: "failed",
+      progress: 5,
+      status: "exporting",
     });
     publishHaloRun(live, run);
-    addAndPublishEvent(database, live, run, "failed", {
-      error: run.errorMessage,
+    addAndPublishEvent(
+      database,
+      live,
+      run,
+      "exporting",
+      { targetType: run.targetType },
+      turnIndex,
+    );
+
+    if (isCancelled(database, runId, signal)) {
+      await markCancelled(database, live, runId);
+      return { cancelled: true, runId };
+    }
+
+    const exported = exportHaloTraceJsonl(database.sqlite, {
+      filters: run.filters,
+      outputDir,
+      runId,
+      targetType: run.targetType,
     });
-    return { runId };
+    run = updateHaloRun(database.sqlite, runId, {
+      exportPath: exported.path,
+      progress: 18,
+      sessionCount: exported.sessionCount,
+      spanCount: exported.spanCount,
+      traceCount: exported.traceCount,
+    });
+    publishHaloRun(live, run);
+    addAndPublishEvent(
+      database,
+      live,
+      run,
+      "exported",
+      {
+        path: exported.path,
+        sessionCount: exported.sessionCount,
+        spanCount: exported.spanCount,
+        traceCount: exported.traceCount,
+        warnings: exported.warnings,
+      },
+      turnIndex,
+    );
+
+    if (exported.spanCount === 0 || exported.traceCount === 0) {
+      run = updateHaloRun(database.sqlite, runId, {
+        errorMessage: "No traces matched the selected HALO filters.",
+        finishedAt: Date.now(),
+        progress: 100,
+        status: "failed",
+      });
+      settleActiveAssistantTurn(database, runId, "failed", run.errorMessage);
+      publishHaloRun(live, run);
+      addAndPublishEvent(
+        database,
+        live,
+        run,
+        "failed",
+        { error: run.errorMessage },
+        turnIndex,
+      );
+      return { runId };
+    }
+    tracePath = exported.path;
   }
 
-  const configPath = join(outputDir, "runner-config.json");
-  const resultPath = join(outputDir, "result.json");
+  const turnSuffix = turnIndex > 1 ? `-turn-${turnIndex}` : "";
+  const configPath = join(outputDir, `runner-config${turnSuffix}.json`);
+  const resultPath = join(outputDir, `result${turnSuffix}.json`);
+  const messages = buildRunnerMessages(database.sqlite, run, turnIndex);
   writeFileSync(
     configPath,
     JSON.stringify(
@@ -285,6 +417,7 @@ async function processHaloRun(input: {
         maxDepth: run.maxDepth,
         maxParallel: run.maxParallel,
         maxTurns: run.maxTurns,
+        messages,
         model: run.model || provider.model,
         prompt: run.prompt,
         provider: {
@@ -293,7 +426,7 @@ async function processHaloRun(input: {
           headers: provider.headers,
         },
         runId,
-        tracePath: exported.path,
+        tracePath,
       },
       null,
       2,
@@ -307,6 +440,10 @@ async function processHaloRun(input: {
     startedAt: Date.now(),
     status: "running",
   });
+  const activeTurn = getAssistantTurn(database.sqlite, runId, turnIndex);
+  if (activeTurn) {
+    updateHaloRunTurn(database.sqlite, activeTurn.id, { status: "streaming" });
+  }
   publishHaloRun(live, run);
 
   const terminal = await runPythonBridge({
@@ -317,6 +454,7 @@ async function processHaloRun(input: {
     resultPath,
     run,
     signal,
+    turnIndex,
   });
   if (terminal.cancelled) {
     await markCancelled(database, live, runId);
@@ -333,6 +471,7 @@ async function runPythonBridge(input: {
   resultPath: string;
   run: HaloRun;
   signal: AbortSignal | undefined;
+  turnIndex: number;
 }) {
   const runnerPath = resolveHaloRunnerPath();
   const proc = Bun.spawn(["uv", "run", "python", runnerPath, input.configPath], {
@@ -353,7 +492,14 @@ async function runPythonBridge(input: {
     }
     const eventType = String(event.type ?? "log");
     currentRun = getHaloRun(input.database.sqlite, input.run.id) ?? currentRun;
-    addAndPublishEvent(input.database, input.live, currentRun, eventType, event);
+    addAndPublishEvent(
+      input.database,
+      input.live,
+      currentRun,
+      eventType,
+      event,
+      input.turnIndex,
+    );
 
     if (eventType === "delta" || eventType === "agent_step") {
       const progress = Math.min(92, Math.max(currentRun.progress, eventType === "delta" ? 45 : 60));
@@ -384,7 +530,24 @@ async function runPythonBridge(input: {
         progress: 100,
         status: eventType === "completed" ? "completed" : "incomplete",
       });
+      const turn = getAssistantTurn(
+        input.database.sqlite,
+        input.run.id,
+        input.turnIndex,
+      );
+      if (turn) {
+        updateHaloRunTurn(input.database.sqlite, turn.id, {
+          content: finalAnswer,
+          finishedAt: Date.now(),
+          status: eventType === "completed" ? "completed" : "incomplete",
+        });
+      }
       publishHaloRun(input.live, currentRun);
+      try {
+        ensureHaloReportFile(input.database, input.run.id);
+      } catch {
+        // The report can still be materialized on demand from the UI.
+      }
       return;
     }
 
@@ -396,6 +559,12 @@ async function runPythonBridge(input: {
         progress: 100,
         status: "failed",
       });
+      settleActiveAssistantTurn(
+        input.database,
+        input.run.id,
+        "failed",
+        currentRun.errorMessage,
+      );
       publishHaloRun(input.live, currentRun);
     }
   }).catch((error) => {
@@ -420,10 +589,16 @@ async function runPythonBridge(input: {
       progress: 100,
       status: "failed",
     });
+    settleActiveAssistantTurn(input.database, input.run.id, "failed", message);
     publishHaloRun(input.live, failed);
-    addAndPublishEvent(input.database, input.live, failed, "failed", {
-      error: message,
-    });
+    addAndPublishEvent(
+      input.database,
+      input.live,
+      failed,
+      "failed",
+      { error: message },
+      input.turnIndex,
+    );
   }
   return { cancelled: false };
 }
@@ -491,14 +666,44 @@ function addAndPublishEvent(
   run: HaloRun,
   eventType: string,
   payload: Record<string, unknown>,
+  turnIndex?: number,
 ) {
   const event = addHaloRunEvent(database.sqlite, {
     eventType,
     payload,
     runId: run.id,
+    turnIndex: turnIndex ?? null,
   });
   publishHaloRunEvent(live, run, event);
   return event;
+}
+
+/**
+ * Extend the job lock far beyond the queue's lock duration. Failures are
+ * swallowed — a missed renewal must never be worse than the expiry it
+ * prevents (regression guard for the June 2026 "Invalid or expired lock
+ * token" crash during multi-minute engine turns).
+ */
+async function renewJobLock(job: Job<HaloJobData>) {
+  const lockableJob = job as Job<HaloJobData> & { token?: string };
+  if (!lockableJob.token) return;
+  await job.extendLock(lockableJob.token, HALO_LOCK_EXTENSION_MS).catch(() => {});
+}
+
+/** Mark the in-flight assistant turn terminal when a run dies outside the happy path. */
+function settleActiveAssistantTurn(
+  database: DatabaseHandle,
+  runId: string,
+  status: "cancelled" | "failed",
+  errorMessage: string | null,
+) {
+  const turn = getLatestAssistantTurn(database.sqlite, runId);
+  if (!turn || (turn.status !== "pending" && turn.status !== "streaming")) return;
+  updateHaloRunTurn(database.sqlite, turn.id, {
+    errorMessage,
+    finishedAt: Date.now(),
+    status,
+  });
 }
 
 async function markCancelled(
@@ -511,6 +716,7 @@ async function markCancelled(
     finishedAt: Date.now(),
     status: "cancelled",
   });
+  settleActiveAssistantTurn(database, runId, "cancelled", "HALO run cancelled by user.");
   publishHaloRun(live, cancelled);
   addAndPublishEvent(database, live, cancelled, "cancelled", {
     error: "HALO run cancelled by user.",
@@ -525,10 +731,6 @@ function isCancelled(
   return signal?.aborted || isHaloRunCancelled(database.sqlite, runId);
 }
 
-function outputDirForRun(databasePath: string, runId: string) {
-  if (databasePath === ":memory:") return resolve("data/halo-runs", runId);
-  return resolve(dirname(databasePath), "halo-runs", runId);
-}
 
 function queueDataPath(databasePath: string) {
   return databasePath === ":memory:" ? ":memory:" : `${databasePath}.halo.bunqueue.sqlite`;

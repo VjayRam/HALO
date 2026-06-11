@@ -87,7 +87,7 @@ export function buildApplicationMenu(): ApplicationMenuItemConfig[] {
         },
         {
           accelerator: "CommandOrControl+Shift+I",
-          label: "Import Langfuse Data...",
+          label: "Import Data...",
           action: "import-data",
         },
         { label: "Clear Telemetry Data...", action: "clear-data" },

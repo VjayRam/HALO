@@ -15,6 +15,15 @@ env.HALO_PROJECT_ROOT = projectRoot;
 env.HALO_RUNNER_PATH = `${projectRoot}/scripts/halo-local-runner.py`;
 env.HALO_VIEW_URL = viewUrl;
 
+// When custom ports are requested, point the frontend at the same ports the
+// backend will bind so the whole dev stack stays in sync.
+if (Bun.env.HALO_INGEST_PORT && !env.VITE_TRPC_HTTP_URL) {
+  env.VITE_TRPC_HTTP_URL = `http://127.0.0.1:${Bun.env.HALO_INGEST_PORT}/trpc`;
+}
+if (Bun.env.HALO_LIVE_WS_PORT && !env.VITE_TRPC_WS_URL) {
+  env.VITE_TRPC_WS_URL = `ws://127.0.0.1:${Bun.env.HALO_LIVE_WS_PORT}`;
+}
+
 const dbPush = Bun.spawnSync([process.execPath, "run", "db:push"], {
   cwd: projectRoot,
   env,

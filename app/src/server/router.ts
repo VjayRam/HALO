@@ -3,15 +3,17 @@ import { z } from "zod";
 import type { DatabaseHandle } from "./db/client";
 import { getHaloEngineStatus, installOrUpdateHaloEngine, testHaloProvider } from "./halo/engine";
 import type { HaloRunService } from "./halo/runQueue";
+import { ensureHaloReportFile, listHaloRunArtifacts } from "./halo/report";
 import {
   deleteHaloProvider,
   getHaloProvider,
   listHaloProviders,
   listHaloRunEvents,
+  listHaloRunTurns,
   saveHaloProvider,
 } from "./halo/storage";
 import { HALO_PROVIDER_TYPES, HALO_RUN_TARGET_TYPES } from "./halo/types";
-import { discoverLangfuse } from "./langfuse/client";
+import { discoverLangfuse, previewLangfuseImport } from "./langfuse/client";
 import type { LangfuseImportService } from "./langfuse/importQueue";
 import {
   deleteLangfuseConnection,
@@ -22,6 +24,17 @@ import {
   markLangfuseConnectionError,
   saveLangfuseConnection,
 } from "./langfuse/storage";
+import { discoverPhoenix, previewPhoenixImport } from "./phoenix/client";
+import type { PhoenixImportService } from "./phoenix/importQueue";
+import {
+  deletePhoenixConnection,
+  getPhoenixConnection,
+  getPhoenixImportJob,
+  listPhoenixConnections,
+  listPhoenixImportJobs,
+  markPhoenixConnectionError,
+  savePhoenixConnection,
+} from "./phoenix/storage";
 import type { LiveEvent, LiveEventFilter, LiveEventStore } from "./live/events";
 import {
   buildSpanTree,
@@ -54,7 +67,9 @@ import {
 export type TRPCContext = {
   database: DatabaseHandle;
   haloRuns?: HaloRunService;
+  ingestUrl?: string;
   langfuseImports?: LangfuseImportService;
+  phoenixImports?: PhoenixImportService;
   live: LiveEventStore;
   liveUrl: string;
 };
@@ -163,6 +178,20 @@ const langfuseTraceFiltersSchema = z.object({
   version: z.string().optional(),
 });
 
+const phoenixConnectionInputSchema = z.object({
+  apiKey: z.string().optional(),
+  baseUrl: z.string().min(1).optional(),
+  id: z.string().min(1).optional(),
+  name: z.string().min(1).max(120).optional(),
+});
+
+const phoenixTraceFiltersSchema = z.object({
+  fromTimestamp: z.string().optional(),
+  projectId: z.string().optional(),
+  projectName: z.string().optional(),
+  toTimestamp: z.string().optional(),
+});
+
 const haloProviderTypeSchema = z.enum(HALO_PROVIDER_TYPES);
 const haloRunTargetTypeSchema = z.enum(HALO_RUN_TARGET_TYPES);
 const haloProviderInputSchema = z.object({
@@ -189,7 +218,7 @@ const haloRunStartSchema = z.object({
 export const appRouter = t.router({
   telemetry: t.router({
     info: t.procedure.query(({ ctx }) =>
-      getTelemetryInfo(ctx.database.sqlite, ctx.database.path, ctx.liveUrl),
+      getTelemetryInfo(ctx.database.sqlite, ctx.database.path, ctx.liveUrl, ctx.ingestUrl),
     ),
     clearData: t.procedure.mutation(({ ctx }) =>
       clearTelemetryData(ctx.database.sqlite),
@@ -308,6 +337,42 @@ export const appRouter = t.router({
           }
           return run;
         }),
+      continue: t.procedure
+        .input(
+          z.object({
+            message: z.string().min(1).max(20_000),
+            runId: z.string().min(1),
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          const service = requireHaloRunService(ctx);
+          try {
+            const run = await service.continueRun(input.runId, input.message);
+            if (!run) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "HALO run not found" });
+            }
+            return run;
+          } catch (error) {
+            if (error instanceof TRPCError) throw error;
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Could not continue HALO run.",
+            });
+          }
+        }),
+      delete: t.procedure
+        .input(z.object({ runId: z.string().min(1) }))
+        .mutation(async ({ ctx, input }) => {
+          const service = requireHaloRunService(ctx);
+          const deleted = await service.delete(input.runId);
+          if (!deleted) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "HALO run not found" });
+          }
+          return { ok: true };
+        }),
       get: t.procedure
         .input(z.object({ runId: z.string().min(1) }))
         .query(({ ctx, input }) => {
@@ -318,16 +383,49 @@ export const appRouter = t.router({
           }
           return run;
         }),
+      getTurns: t.procedure
+        .input(z.object({ runId: z.string().min(1) }))
+        .query(({ ctx, input }) => {
+          const service = requireHaloRunService(ctx);
+          const run = service.get(input.runId);
+          if (!run) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "HALO run not found" });
+          }
+          return listHaloRunTurns(ctx.database.sqlite, run);
+        }),
+      getArtifacts: t.procedure
+        .input(z.object({ runId: z.string().min(1) }))
+        .query(({ ctx, input }) =>
+          listHaloRunArtifacts(ctx.database.sqlite, input.runId),
+        ),
       getEvents: t.procedure
         .input(
           z.object({
+            eventTypes: z.array(z.string().min(1)).max(10).optional(),
             limit: z.number().int().min(1).max(1000).optional(),
             runId: z.string().min(1),
           }),
         )
         .query(({ ctx, input }) =>
-          listHaloRunEvents(ctx.database.sqlite, input.runId, input.limit),
+          listHaloRunEvents(
+            ctx.database.sqlite,
+            input.runId,
+            input.limit,
+            input.eventTypes,
+          ),
         ),
+      prepareReport: t.procedure
+        .input(z.object({ runId: z.string().min(1) }))
+        .mutation(({ ctx, input }) => {
+          const report = ensureHaloReportFile(ctx.database, input.runId);
+          if (!report) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "This run has no final answer to export yet.",
+            });
+          }
+          return report;
+        }),
       list: t.procedure
         .input(z.object({ limit: z.number().int().min(1).max(100).optional() }).optional())
         .query(({ ctx, input }) => {
@@ -494,6 +592,42 @@ export const appRouter = t.router({
           listLangfuseImportJobs(ctx.database.sqlite, input?.limit ?? 20),
         ),
 
+      preview: t.procedure
+        .input(
+          z.object({
+            connectionId: z.string().min(1),
+            filters: langfuseTraceFiltersSchema.optional(),
+          }),
+        )
+        .query(async ({ ctx, input }) => {
+          const connection = getLangfuseConnection(
+            ctx.database.sqlite,
+            input.connectionId,
+          );
+          if (!connection) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Langfuse connection not found",
+            });
+          }
+          try {
+            return await previewLangfuseImport({
+              baseUrl: connection.baseUrl,
+              filters: input.filters,
+              publicKey: connection.publicKey,
+              secretKey: connection.secretKey,
+            });
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Could not preview the Langfuse import.",
+            });
+          }
+        }),
+
       start: t.procedure
         .input(
           z.object({
@@ -507,6 +641,179 @@ export const appRouter = t.router({
             connectionId: input.connectionId,
             filters: input.filters ?? {},
           });
+        }),
+    }),
+  }),
+
+  phoenix: t.router({
+    connections: t.router({
+      list: t.procedure.query(({ ctx }) =>
+        listPhoenixConnections(ctx.database.sqlite),
+      ),
+
+      saveAndDiscover: t.procedure
+        .input(phoenixConnectionInputSchema)
+        .mutation(async ({ ctx, input }) => {
+          const existing = input.id
+            ? getPhoenixConnection(ctx.database.sqlite, input.id)
+            : null;
+          const baseUrl = input.baseUrl ?? existing?.baseUrl;
+          const apiKey = input.apiKey ?? existing?.apiKey ?? "";
+          const name =
+            input.name ??
+            existing?.name ??
+            (baseUrl ? safeUrlHost(baseUrl, "Phoenix") : "Phoenix");
+
+          if (!baseUrl) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Phoenix URL is required.",
+            });
+          }
+
+          let discovery: Awaited<ReturnType<typeof discoverPhoenix>>;
+          try {
+            discovery = await discoverPhoenix({ apiKey, baseUrl });
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message
+                : "Could not connect to Phoenix.";
+            try {
+              markPhoenixConnectionError(ctx.database.sqlite, {
+                baseUrl,
+                error: message,
+                id: input.id,
+              });
+            } catch {
+              // Preserve the actionable Phoenix connection error even if the
+              // local database is currently unavailable.
+            }
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message,
+            });
+          }
+
+          try {
+            const connection = savePhoenixConnection(ctx.database.sqlite, {
+              apiKey,
+              baseUrl: discovery.baseUrl,
+              discovery,
+              id: input.id,
+              name,
+            });
+            return { connection, discovery };
+          } catch (error) {
+            const detail =
+              error instanceof Error ? error.message : "Unknown SQLite error.";
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: `Connected to Phoenix, but could not save the connection locally: ${detail}`,
+            });
+          }
+        }),
+
+      delete: t.procedure
+        .input(z.object({ id: z.string().min(1) }))
+        .mutation(({ ctx, input }) => {
+          deletePhoenixConnection(ctx.database.sqlite, input.id);
+          return { ok: true };
+        }),
+    }),
+
+    imports: t.router({
+      cancel: t.procedure
+        .input(z.object({ jobId: z.string().min(1) }))
+        .mutation(async ({ ctx, input }) => {
+          const service = requirePhoenixImportService(ctx);
+          const job = await service.cancel(input.jobId);
+          if (!job) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Import job not found",
+            });
+          }
+          return job;
+        }),
+
+      get: t.procedure
+        .input(z.object({ jobId: z.string().min(1) }))
+        .query(({ ctx, input }) => {
+          const job = getPhoenixImportJob(ctx.database.sqlite, input.jobId);
+          if (!job) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Import job not found",
+            });
+          }
+          return job;
+        }),
+
+      list: t.procedure
+        .input(z.object({ limit: z.number().int().min(1).max(100).optional() }).optional())
+        .query(({ ctx, input }) =>
+          listPhoenixImportJobs(ctx.database.sqlite, input?.limit ?? 20),
+        ),
+
+      preview: t.procedure
+        .input(
+          z.object({
+            connectionId: z.string().min(1),
+            filters: phoenixTraceFiltersSchema.optional(),
+          }),
+        )
+        .query(async ({ ctx, input }) => {
+          const connection = getPhoenixConnection(
+            ctx.database.sqlite,
+            input.connectionId,
+          );
+          if (!connection) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Phoenix connection not found",
+            });
+          }
+          try {
+            return await previewPhoenixImport({
+              apiKey: connection.apiKey,
+              baseUrl: connection.baseUrl,
+              filters: input.filters,
+            });
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Could not preview the Phoenix import.",
+            });
+          }
+        }),
+
+      start: t.procedure
+        .input(
+          z.object({
+            connectionId: z.string().min(1),
+            filters: phoenixTraceFiltersSchema.optional(),
+          }),
+        )
+        .mutation(async ({ ctx, input }) => {
+          const service = requirePhoenixImportService(ctx);
+          try {
+            return await service.start({
+              connectionId: input.connectionId,
+              filters: input.filters ?? {},
+            });
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Could not start the Phoenix import.",
+            });
+          }
         }),
     }),
   }),
@@ -737,6 +1044,16 @@ function requireLangfuseImportService(ctx: TRPCContext): LangfuseImportService {
   return ctx.langfuseImports;
 }
 
+function requirePhoenixImportService(ctx: TRPCContext): PhoenixImportService {
+  if (!ctx.phoenixImports) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Phoenix import queue is not available.",
+    });
+  }
+  return ctx.phoenixImports;
+}
+
 function requireHaloRunService(ctx: TRPCContext): HaloRunService {
   if (!ctx.haloRuns) {
     throw new TRPCError({
@@ -747,11 +1064,11 @@ function requireHaloRunService(ctx: TRPCContext): HaloRunService {
   return ctx.haloRuns;
 }
 
-function safeUrlHost(value: string) {
+function safeUrlHost(value: string, fallback = "Langfuse") {
   try {
-    return new URL(value).host || "Langfuse";
+    return new URL(value).host || fallback;
   } catch {
-    return "Langfuse";
+    return fallback;
   }
 }
 

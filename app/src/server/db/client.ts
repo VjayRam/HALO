@@ -207,6 +207,44 @@ export function ensureSchema(sqlite: Database) {
   `);
 
   sqlite.run(`
+    CREATE TABLE IF NOT EXISTS phoenix_connections (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      api_key TEXT NOT NULL DEFAULT '',
+      discovered_projects_json TEXT NOT NULL DEFAULT '[]',
+      last_status TEXT NOT NULL DEFAULT 'unknown',
+      last_error TEXT,
+      last_connected_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
+  sqlite.run(`
+    CREATE TABLE IF NOT EXISTS phoenix_import_jobs (
+      id TEXT PRIMARY KEY NOT NULL,
+      connection_id TEXT NOT NULL,
+      bunqueue_job_id TEXT,
+      status TEXT NOT NULL,
+      filters_json TEXT NOT NULL DEFAULT '{}',
+      progress INTEGER NOT NULL DEFAULT 0,
+      total_traces INTEGER NOT NULL DEFAULT 0,
+      imported_traces INTEGER NOT NULL DEFAULT 0,
+      total_observations INTEGER NOT NULL DEFAULT 0,
+      imported_observations INTEGER NOT NULL DEFAULT 0,
+      failed_traces INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      current_trace_id TEXT,
+      current_trace_name TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER
+    );
+  `);
+
+  sqlite.run(`
     CREATE TABLE IF NOT EXISTS halo_engine_settings (
       id TEXT PRIMARY KEY NOT NULL DEFAULT 'default',
       repo_url TEXT NOT NULL DEFAULT 'https://github.com/context-labs/HALO',
@@ -290,6 +328,20 @@ export function ensureSchema(sqlite: Database) {
   `);
 
   sqlite.run(`
+    CREATE TABLE IF NOT EXISTS halo_run_turns (
+      id TEXT PRIMARY KEY NOT NULL,
+      run_id TEXT NOT NULL,
+      turn_index INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'completed',
+      error_message TEXT,
+      created_at INTEGER NOT NULL,
+      finished_at INTEGER
+    );
+  `);
+
+  sqlite.run(`
     CREATE VIRTUAL TABLE IF NOT EXISTS span_search_fts USING fts5(
       project_id UNINDEXED,
       trace_id UNINDEXED,
@@ -298,6 +350,7 @@ export function ensureSchema(sqlite: Database) {
     );
   `);
 
+  ensureColumn(sqlite, "halo_run_events", "turn_index", "INTEGER");
   ensureColumn(sqlite, "trace_summaries", "source", "TEXT NOT NULL DEFAULT 'local'");
   ensureColumn(sqlite, "trace_summaries", "source_trace_id", "TEXT");
   ensureColumn(sqlite, "trace_summaries", "source_connection_id", "TEXT");
@@ -336,12 +389,18 @@ export function ensureSchema(sqlite: Database) {
     "CREATE INDEX IF NOT EXISTS langfuse_import_jobs_connection_idx ON langfuse_import_jobs(connection_id)",
     "CREATE INDEX IF NOT EXISTS langfuse_import_jobs_status_idx ON langfuse_import_jobs(status, updated_at)",
     "CREATE INDEX IF NOT EXISTS langfuse_import_jobs_updated_at_idx ON langfuse_import_jobs(updated_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS phoenix_connections_base_url_uidx ON phoenix_connections(base_url)",
+    "CREATE INDEX IF NOT EXISTS phoenix_connections_updated_at_idx ON phoenix_connections(updated_at)",
+    "CREATE INDEX IF NOT EXISTS phoenix_import_jobs_connection_idx ON phoenix_import_jobs(connection_id)",
+    "CREATE INDEX IF NOT EXISTS phoenix_import_jobs_status_idx ON phoenix_import_jobs(status, updated_at)",
+    "CREATE INDEX IF NOT EXISTS phoenix_import_jobs_updated_at_idx ON phoenix_import_jobs(updated_at)",
     "CREATE INDEX IF NOT EXISTS halo_model_providers_updated_at_idx ON halo_model_providers(updated_at)",
     "CREATE INDEX IF NOT EXISTS halo_runs_status_idx ON halo_runs(status, updated_at)",
     "CREATE INDEX IF NOT EXISTS halo_runs_updated_at_idx ON halo_runs(updated_at)",
     "CREATE INDEX IF NOT EXISTS halo_run_events_run_idx ON halo_run_events(run_id, sequence)",
     "CREATE INDEX IF NOT EXISTS halo_run_events_created_at_idx ON halo_run_events(created_at)",
     "CREATE INDEX IF NOT EXISTS halo_run_artifacts_run_idx ON halo_run_artifacts(run_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS halo_run_turns_run_turn_uidx ON halo_run_turns(run_id, turn_index)",
   ];
 
   for (const sql of indexes) {
@@ -387,6 +446,7 @@ function reconcileTraceSummarySources(sqlite: Database) {
         AND s.trace_id = trace_summaries.trace_id
         AND s.parent_span_id = ''
         AND s.span_attributes NOT LIKE '%"halo.source":"langfuse"%'
+        AND s.span_attributes NOT LIKE '%"halo.source":"phoenix"%'
     )
     OR EXISTS (
       SELECT 1

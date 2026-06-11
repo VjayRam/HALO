@@ -41,7 +41,7 @@ export type ProducerShape =
   | "elevenlabs"
   | "unknown";
 
-export const TRACE_SOURCES = ["local", "langfuse"] as const;
+export const TRACE_SOURCES = ["local", "langfuse", "phoenix"] as const;
 export type TraceSource = (typeof TRACE_SOURCES)[number];
 
 export interface SpanEvent {

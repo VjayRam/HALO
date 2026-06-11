@@ -1,6 +1,6 @@
 import type { OtlpExportTraceServiceRequest } from "../src/server/telemetry/otlp";
 
-const DEFAULT_ENDPOINT = "http://127.0.0.1:8799/v1/traces";
+const DEFAULT_ENDPOINT = `http://127.0.0.1:${Bun.env.HALO_INGEST_PORT ?? "8799"}/v1/traces`;
 const DEFAULT_SPAN_COUNT = 10;
 const DEFAULT_DELAY_MS = 150;
 const MIN_DURATION_MS = 1_000;

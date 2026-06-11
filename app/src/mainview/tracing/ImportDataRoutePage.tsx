@@ -1,18 +1,39 @@
 import { useCallback, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import {
+  ArrowLeft,
+  Clipboard,
+  DownloadCloud,
+  MoreHorizontal,
+  RefreshCcw,
+  Trash2,
+} from "lucide-react";
 
-import { Dialog, toast } from "~/lib/ui";
+import {
+  Button,
+  Dialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  cn,
+  toast,
+} from "~/lib/ui";
 import { trpc } from "~/trpc";
 import { WorkspaceNav } from "~/workspace/WorkspaceNav";
+import { AppHeader } from "~/components/AppHeader";
 import { ImportDataScreen, LocalAgentSetupDialog } from "./ImportDataScreen";
-import { LangfuseImportDialog } from "./LangfuseImportDialog";
-import { TraceTitleBar, type LiveStatus } from "./TraceTitleBar";
+import { LangfuseImportDialog } from "./langfuse/LangfuseImportDialog";
+import { PhoenixImportDialog } from "./phoenix/PhoenixImportDialog";
+import { LiveStatusBadge, type LiveStatus } from "./TraceTitleBar";
 
 const DEFAULT_INGEST_URL = "http://127.0.0.1:8799/v1/traces";
 
 export function ImportDataRoutePage() {
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [phoenixDialogOpen, setPhoenixDialogOpen] = useState(false);
   const [localAgentSetupOpen, setLocalAgentSetupOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
   const utils = trpc.useUtils();
@@ -101,24 +122,64 @@ export function ImportDataRoutePage() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <TraceTitleBar
-        health={infoQuery.data?.lastBatch?.status ?? "waiting"}
-        isRefreshing={isRefreshing}
-        liveStatus={liveStatus}
-        liveUrl={infoQuery.data?.liveUrl ?? "ws://127.0.0.1:8800"}
-        onClearData={() => setClearDialogOpen(true)}
-        onCopy={copyIngestUrl}
-        onImport={() => undefined}
-        onRefresh={refreshTelemetry}
-        title="Trace Monitor"
+      <AppHeader
+        icon={<DownloadCloud className="h-4 w-4 text-detail-brand" />}
+        status={
+          <LiveStatusBadge
+            health={infoQuery.data?.lastBatch?.status ?? "waiting"}
+            liveStatus={liveStatus}
+            liveUrl={infoQuery.data?.liveUrl ?? "ws://127.0.0.1:8800"}
+          />
+        }
+        title="Import data"
+        actions={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button aria-label="More actions" size="icon" variant="ghost">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={refreshTelemetry}>
+                <RefreshCcw
+                  className={cn("mr-2 h-4 w-4", isRefreshing && "animate-spin")}
+                />
+                Refresh
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void copyIngestUrl()}>
+                <Clipboard className="mr-2 h-4 w-4" />
+                Copy ingest URL
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onClick={() => setClearDialogOpen(true)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Clear data…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
       />
 
       <div className="grid min-h-[calc(100vh-3.5rem)] grid-cols-[14rem_minmax(0,1fr)] pt-14">
-        <WorkspaceNav active="traces" />
-        <section className="min-w-0 overflow-hidden">
+        <WorkspaceNav active="imports" />
+        <section className="relative min-w-0 overflow-hidden">
+          <div className="absolute left-8 top-4 z-10">
+            <Link
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+              to="/imports"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Imports
+            </Link>
+          </div>
           <ImportDataScreen
+            ingestUrl={ingestUrl}
             onConnectLocalAgent={() => setLocalAgentSetupOpen(true)}
             onImportLangfuse={() => setImportDialogOpen(true)}
+            onImportPhoenix={() => setPhoenixDialogOpen(true)}
           />
         </section>
       </div>
@@ -127,6 +188,11 @@ export function ImportDataRoutePage() {
         onImported={refreshTelemetry}
         onOpenChange={setImportDialogOpen}
         open={importDialogOpen}
+      />
+      <PhoenixImportDialog
+        onImported={refreshTelemetry}
+        onOpenChange={setPhoenixDialogOpen}
+        open={phoenixDialogOpen}
       />
       <LocalAgentSetupDialog
         envLine={catalystEnvLine}
@@ -139,7 +205,7 @@ export function ImportDataRoutePage() {
         className="sm:!max-w-[520px] md:!w-[520px]"
         confirmButtonVariant="destructive"
         confirmTitle="Clear data"
-        dialogDescription="This removes local traces, spans, search rows, ingest batches, and live telemetry history. Saved Langfuse connections stay intact."
+        dialogDescription="This removes local traces, spans, search rows, ingest batches, and live telemetry history. Saved Langfuse and Phoenix connections stay intact."
         dialogTitle="Clear local telemetry data?"
         disabled={clearDataMutation.isPending}
         loading={clearDataMutation.isPending}

@@ -4,6 +4,7 @@ import type { LiveEventStore } from "../live/events";
 import type { TelemetryFilters } from "../telemetry/types";
 import {
   HALO_REPO_URL,
+  HALO_RUN_TURN_STATUSES,
   type HaloEngineStatus,
   type HaloModelProvider,
   type HaloProviderType,
@@ -12,6 +13,8 @@ import {
   type HaloRunSnapshot,
   type HaloRunStatus,
   type HaloRunTargetType,
+  type HaloRunTurn,
+  type HaloRunTurnStatus,
   type StoredHaloModelProvider,
 } from "./types";
 
@@ -66,6 +69,19 @@ type EventRow = {
   event_type: string;
   payload_json: string;
   created_at: number;
+  turn_index: number | null;
+};
+
+type TurnRow = {
+  id: string;
+  run_id: string;
+  turn_index: number;
+  role: string;
+  content: string;
+  status: string;
+  error_message: string | null;
+  created_at: number;
+  finished_at: number | null;
 };
 
 type EngineRow = {
@@ -426,6 +442,7 @@ export function addHaloRunEvent(
     eventType: string;
     payload: Record<string, unknown>;
     runId: string;
+    turnIndex?: number | null;
   },
 ): HaloRunEvent {
   const sequence =
@@ -440,8 +457,8 @@ export function addHaloRunEvent(
   sqlite
     .query(
       `INSERT INTO halo_run_events (
-        run_id, sequence, event_type, payload_json, created_at
-      ) VALUES (?, ?, ?, ?, ?)`,
+        run_id, sequence, event_type, payload_json, created_at, turn_index
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.runId,
@@ -449,6 +466,7 @@ export function addHaloRunEvent(
       input.eventType,
       JSON.stringify(input.payload),
       createdAt,
+      input.turnIndex ?? null,
     );
   const row = sqlite
     .query<EventRow, []>(
@@ -466,7 +484,21 @@ export function listHaloRunEvents(
   sqlite: Database,
   runId: string,
   limit = 500,
+  eventTypes?: string[],
 ): HaloRunEvent[] {
+  if (eventTypes && eventTypes.length > 0) {
+    const placeholders = eventTypes.map(() => "?").join(", ");
+    return sqlite
+      .query<EventRow, [string, ...string[], number]>(
+        `SELECT *
+         FROM halo_run_events
+         WHERE run_id = ? AND event_type IN (${placeholders})
+         ORDER BY sequence ASC
+         LIMIT ?`,
+      )
+      .all(runId, ...eventTypes, limit)
+      .map(mapEvent);
+  }
   return sqlite
     .query<EventRow, [string, number]>(
       `SELECT *
@@ -477,6 +509,241 @@ export function listHaloRunEvents(
     )
     .all(runId, limit)
     .map(mapEvent);
+}
+
+/** Insert the initial conversation pair for a freshly created run. */
+export function createHaloRunTurns(sqlite: Database, run: HaloRun): HaloRunTurn[] {
+  insertTurn(sqlite, run.id, 0, "user", run.prompt, "completed", Date.now());
+  insertTurn(sqlite, run.id, 1, "assistant", "", "pending", Date.now());
+  return listHaloRunTurns(sqlite, run);
+}
+
+/** Append a follow-up user turn plus its pending assistant turn. */
+export function appendHaloRunTurns(
+  sqlite: Database,
+  run: HaloRun,
+  message: string,
+): { assistantTurn: HaloRunTurn; userTurn: HaloRunTurn } {
+  // Legacy runs (pre multi-turn) have no rows yet — persist their synthesized
+  // first exchange so follow-up indexes line up.
+  if (countTurns(sqlite, run.id) === 0) {
+    insertTurn(
+      sqlite,
+      run.id,
+      0,
+      "user",
+      run.prompt,
+      "completed",
+      Date.parse(run.createdAt) || Date.now(),
+    );
+    insertTurn(
+      sqlite,
+      run.id,
+      1,
+      "assistant",
+      run.finalAnswer ?? "",
+      legacyAssistantStatus(run.status),
+      Date.parse(run.createdAt) || Date.now(),
+      run.finishedAt ? Date.parse(run.finishedAt) : null,
+    );
+  }
+  const nextIndex = maxTurnIndex(sqlite, run.id) + 1;
+  const now = Date.now();
+  const userId = insertTurn(sqlite, run.id, nextIndex, "user", message, "completed", now);
+  const assistantId = insertTurn(
+    sqlite,
+    run.id,
+    nextIndex + 1,
+    "assistant",
+    "",
+    "pending",
+    now,
+  );
+  const userTurn = getTurnById(sqlite, userId);
+  const assistantTurn = getTurnById(sqlite, assistantId);
+  if (!userTurn || !assistantTurn) throw new Error("Failed to append HALO run turns");
+  return { assistantTurn, userTurn };
+}
+
+export function updateHaloRunTurn(
+  sqlite: Database,
+  id: string,
+  patch: Partial<{
+    content: string;
+    errorMessage: string | null;
+    finishedAt: number | null;
+    status: HaloRunTurnStatus;
+  }>,
+): HaloRunTurn {
+  const sets: string[] = [];
+  const params: Record<string, string | number | null> = { id };
+  const add = (column: string, key: keyof typeof patch) => {
+    if (!(key in patch)) return;
+    sets.push(`${column} = :${String(key)}`);
+    params[String(key)] = patch[key] ?? null;
+  };
+  add("content", "content");
+  add("status", "status");
+  add("error_message", "errorMessage");
+  add("finished_at", "finishedAt");
+  if (sets.length > 0) {
+    sqlite
+      .query(`UPDATE halo_run_turns SET ${sets.join(", ")} WHERE id = :id`)
+      .run(params);
+  }
+  const turn = getTurnById(sqlite, id);
+  if (!turn) throw new Error("HALO run turn not found");
+  return turn;
+}
+
+/**
+ * Conversation turns for a run, oldest first. Runs created before multi-turn
+ * have no rows; their two-turn exchange is synthesized from prompt/finalAnswer
+ * (not persisted — appendHaloRunTurns persists on first follow-up).
+ */
+export function listHaloRunTurns(sqlite: Database, run: HaloRun): HaloRunTurn[] {
+  const rows = sqlite
+    .query<TurnRow, [string]>(
+      `SELECT * FROM halo_run_turns WHERE run_id = ? ORDER BY turn_index ASC`,
+    )
+    .all(run.id)
+    .map(mapTurn);
+  if (rows.length > 0) return rows;
+  return [
+    {
+      content: run.prompt,
+      createdAt: run.createdAt,
+      errorMessage: null,
+      finishedAt: run.createdAt,
+      id: `${run.id}:legacy:0`,
+      role: "user",
+      runId: run.id,
+      status: "completed",
+      turnIndex: 0,
+    },
+    {
+      content: run.finalAnswer ?? "",
+      createdAt: run.createdAt,
+      errorMessage: run.errorMessage,
+      finishedAt: run.finishedAt,
+      id: `${run.id}:legacy:1`,
+      role: "assistant",
+      runId: run.id,
+      status: legacyAssistantStatus(run.status),
+      turnIndex: 1,
+    },
+  ];
+}
+
+export function getAssistantTurn(
+  sqlite: Database,
+  runId: string,
+  turnIndex: number,
+): HaloRunTurn | null {
+  const row = sqlite
+    .query<TurnRow, [string, number]>(
+      `SELECT * FROM halo_run_turns
+       WHERE run_id = ? AND turn_index = ? AND role = 'assistant'
+       LIMIT 1`,
+    )
+    .get(runId, turnIndex);
+  return row ? mapTurn(row) : null;
+}
+
+export function getLatestAssistantTurn(
+  sqlite: Database,
+  runId: string,
+): HaloRunTurn | null {
+  const row = sqlite
+    .query<TurnRow, [string]>(
+      `SELECT * FROM halo_run_turns
+       WHERE run_id = ? AND role = 'assistant'
+       ORDER BY turn_index DESC
+       LIMIT 1`,
+    )
+    .get(runId);
+  return row ? mapTurn(row) : null;
+}
+
+/**
+ * OpenAI-shaped message history for the runner: every user turn plus assistant
+ * turns that produced content, up to (not including) the pending assistant turn.
+ */
+export function buildRunnerMessages(
+  sqlite: Database,
+  run: HaloRun,
+  upToTurnIndex: number,
+): Array<{ content: string; role: "assistant" | "user" }> {
+  return listHaloRunTurns(sqlite, run)
+    .filter(
+      (turn) =>
+        turn.turnIndex < upToTurnIndex &&
+        (turn.role === "user" || turn.content.trim().length > 0),
+    )
+    .map((turn) => ({ content: turn.content, role: turn.role }));
+}
+
+export function deleteHaloRun(sqlite: Database, runId: string) {
+  sqlite.query(`DELETE FROM halo_run_events WHERE run_id = ?`).run(runId);
+  sqlite.query(`DELETE FROM halo_run_artifacts WHERE run_id = ?`).run(runId);
+  sqlite.query(`DELETE FROM halo_run_turns WHERE run_id = ?`).run(runId);
+  sqlite.query(`DELETE FROM halo_runs WHERE id = ?`).run(runId);
+}
+
+function legacyAssistantStatus(status: HaloRunStatus): HaloRunTurnStatus {
+  if (status === "completed") return "completed";
+  if (status === "incomplete") return "incomplete";
+  if (status === "cancelled") return "cancelled";
+  if (status === "failed" || status === "interrupted") return "failed";
+  return "streaming";
+}
+
+function insertTurn(
+  sqlite: Database,
+  runId: string,
+  turnIndex: number,
+  role: "assistant" | "user",
+  content: string,
+  status: HaloRunTurnStatus,
+  createdAt: number,
+  finishedAt: number | null = role === "user" ? createdAt : null,
+) {
+  const id = crypto.randomUUID();
+  sqlite
+    .query(
+      `INSERT INTO halo_run_turns (
+        id, run_id, turn_index, role, content, status, error_message, created_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+    )
+    .run(id, runId, turnIndex, role, content, status, createdAt, finishedAt);
+  return id;
+}
+
+function getTurnById(sqlite: Database, id: string): HaloRunTurn | null {
+  const row = sqlite
+    .query<TurnRow, [string]>(`SELECT * FROM halo_run_turns WHERE id = ? LIMIT 1`)
+    .get(id);
+  return row ? mapTurn(row) : null;
+}
+
+function countTurns(sqlite: Database, runId: string) {
+  return (
+    sqlite
+      .query<{ value: number }, [string]>(
+        `SELECT count(*) AS value FROM halo_run_turns WHERE run_id = ?`,
+      )
+      .get(runId)?.value ?? 0
+  );
+}
+
+function maxTurnIndex(sqlite: Database, runId: string) {
+  return (
+    sqlite
+      .query<{ value: number | null }, [string]>(
+        `SELECT max(turn_index) AS value FROM halo_run_turns WHERE run_id = ?`,
+      )
+      .get(runId)?.value ?? -1
+  );
 }
 
 export function publishHaloRun(live: LiveEventStore, run: HaloRun) {
@@ -601,7 +868,28 @@ function mapEvent(row: EventRow): HaloRunEvent {
     payload: parseJson(row.payload_json, {}),
     runId: row.run_id,
     sequence: row.sequence,
+    turnIndex: row.turn_index,
   };
+}
+
+function mapTurn(row: TurnRow): HaloRunTurn {
+  return {
+    content: row.content,
+    createdAt: isoFromMs(row.created_at),
+    errorMessage: row.error_message,
+    finishedAt: row.finished_at ? isoFromMs(row.finished_at) : null,
+    id: row.id,
+    role: row.role === "user" ? "user" : "assistant",
+    runId: row.run_id,
+    status: normalizeTurnStatus(row.status),
+    turnIndex: row.turn_index,
+  };
+}
+
+function normalizeTurnStatus(value: string): HaloRunTurnStatus {
+  return (HALO_RUN_TURN_STATUSES as readonly string[]).includes(value)
+    ? (value as HaloRunTurnStatus)
+    : "completed";
 }
 
 function normalizeBaseUrl(value: string) {

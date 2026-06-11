@@ -18,6 +18,18 @@ export type LangfuseTraceFilters = {
   release?: string;
 };
 
+/** Live counts shown on the import dialog's select step. */
+export type LangfuseImportPreview = {
+  earliestTimestamp: string | null;
+  latestTimestamp: string | null;
+  observations: number;
+  observationsEstimated: boolean;
+  sampleSize: number;
+  sessions: number;
+  sessionsEstimated: boolean;
+  traces: number;
+};
+
 export type LangfuseObservationListResponse = {
   data: LangfuseObservation[];
   meta: {

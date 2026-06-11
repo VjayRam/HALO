@@ -1,16 +1,16 @@
 import { Link } from "@tanstack/react-router";
-import { Activity, BrainCircuit, Settings } from "lucide-react";
+import { Activity, BrainCircuit, DownloadCloud, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "~/lib/ui";
 
-export type WorkspaceSection = "traces" | "analysis" | "settings";
+export type WorkspaceSection = "traces" | "analysis" | "imports" | "settings";
 
 const navItems: Array<{
   id: WorkspaceSection;
   icon: ReactNode;
   label: string;
-  to: "/traces" | "/analysis" | "/settings";
+  to: "/traces" | "/analysis" | "/imports" | "/settings";
 }> = [
   {
     id: "traces",
@@ -23,6 +23,12 @@ const navItems: Array<{
     icon: <BrainCircuit className="h-4 w-4" strokeWidth={1.5} />,
     label: "Analysis",
     to: "/analysis",
+  },
+  {
+    id: "imports",
+    icon: <DownloadCloud className="h-4 w-4" strokeWidth={1.5} />,
+    label: "Imports",
+    to: "/imports",
   },
   {
     id: "settings",
@@ -61,7 +67,7 @@ function WorkspaceNavLink({
   active: boolean;
   icon: ReactNode;
   label: string;
-  to: "/traces" | "/analysis" | "/settings";
+  to: "/traces" | "/analysis" | "/imports" | "/settings";
 }) {
   return (
     <li className="px-3 py-px">

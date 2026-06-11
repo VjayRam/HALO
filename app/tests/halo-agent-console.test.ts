@@ -136,5 +136,6 @@ function makeEvent(payload: Record<string, unknown>): HaloRunEvent {
     },
     runId: "run-1",
     sequence: 7,
+    turnIndex: null,
   };
 }

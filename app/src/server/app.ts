@@ -5,10 +5,11 @@ import { HTTPException } from "hono/http-exception";
 import type { DatabaseHandle } from "./db/client";
 import type { HaloRunService } from "./halo/runQueue";
 import type { LangfuseImportService } from "./langfuse/importQueue";
+import type { PhoenixImportService } from "./phoenix/importQueue";
 import { createLiveEventStore, type LiveEventStore } from "./live/events";
 import { appRouter } from "./router";
 import { ingestTelemetry } from "./telemetry/storage";
-import { LIVE_WS_URL } from "./telemetry/types";
+import { LIVE_WS_URL, TRACE_INGEST_URL } from "./telemetry/types";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -18,6 +19,8 @@ export function createServerApp(
   liveUrl = LIVE_WS_URL,
   langfuseImports?: LangfuseImportService,
   haloRuns?: HaloRunService,
+  ingestUrl = TRACE_INGEST_URL,
+  phoenixImports?: PhoenixImportService,
 ) {
   const app = new Hono();
 
@@ -73,9 +76,11 @@ export function createServerApp(
       createContext: () => ({
         database,
         haloRuns,
+        ingestUrl,
         langfuseImports,
         live,
         liveUrl,
+        phoenixImports,
       }),
     }),
   );

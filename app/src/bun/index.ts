@@ -8,10 +8,14 @@ import Electrobun, {
 import { configureDesktopRuntimeEnv } from "./desktopRuntime";
 import { installApplicationMenu } from "./appMenu";
 import { loadWindowFrame, persistWindowFrame } from "./windowState";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   APP_BUNDLE_ID,
   APP_NAME,
   APP_RELEASE_URL,
+  type CodingToolAvailability,
   type DesktopAppMetadata,
   type DesktopCommand,
   type DesktopNativeStatus,
@@ -19,18 +23,50 @@ import {
 } from "../desktop/commands";
 import { startTelemetryServer } from "../server/start";
 
-const runtimePaths = configureDesktopRuntimeEnv();
-const api = startTelemetryServer({
-  dbPath: runtimePaths.dbPath,
-  hostname: "127.0.0.1",
-  port: 8799,
+// A desktop app must not die because a background queue hiccupped. Anything
+// that escapes to the process level gets logged; the queue failure handlers
+// and startup interrupted-run sweeps own the actual recovery.
+process.on("unhandledRejection", (error) => {
+  console.error(
+    "[halo] unhandled rejection:",
+    error instanceof Error ? (error.stack ?? error.message) : error,
+  );
 });
+process.on("uncaughtException", (error) => {
+  console.error(
+    "[halo] uncaught exception:",
+    error instanceof Error ? (error.stack ?? error.message) : error,
+  );
+});
+
+const runtimePaths = configureDesktopRuntimeEnv();
+const api = (() => {
+  try {
+    return startTelemetryServer({
+      dbPath: runtimePaths.dbPath,
+      hostname: "127.0.0.1",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      Utils.showNotification({
+        body: message,
+        silent: false,
+        title: "HALO could not start its local server",
+      });
+    } catch {
+      // Notifications are best-effort during early startup.
+    }
+    throw error;
+  }
+})();
 
 const desktopRpc = BrowserView.defineRPC<HaloDesktopRPCSchema>({
   maxRequestTime: 60_000,
   handlers: {
     requests: {
       checkForUpdates,
+      detectCodingTools,
       getAppMetadata,
       openAppDataFolder: () => {
         const ok = Utils.openPath(runtimePaths.appDataDir);
@@ -71,7 +107,7 @@ const desktopRpc = BrowserView.defineRPC<HaloDesktopRPCSchema>({
             ? [
                 { type: "separator" as const },
                 {
-                  label: "Open Langfuse Source",
+                  label: `Open ${input.sourceName || "Imported"} Source`,
                   action: "open-context-url",
                   data: {
                     url: input.sourceUrl,
@@ -175,6 +211,7 @@ Updater.onStatusChange((entry) => {
 Electrobun.events.on("before-quit", () => {
   windowState.stop();
   void api.langfuseImports.close(true);
+  void api.phoenixImports.close(true);
   void api.haloRuns.close(true);
   api.liveServer?.stop();
   api.server.stop(true);
@@ -246,6 +283,31 @@ async function getAppMetadata(): Promise<DesktopAppMetadata> {
       version: fallback.version,
     };
   }
+}
+
+/**
+ * Best-effort detection of installed coding tools. App-bundle checks cover
+ * the URL-scheme handlers (which is what the deep links need); CLI binaries
+ * on PATH are a softer signal that still lets "Copy prompt" make sense.
+ */
+function detectCodingTools(): CodingToolAvailability {
+  const home = homedir();
+  return {
+    "claude-code": Boolean(
+      existsSync(join(home, "Applications", "Claude Code URL Handler.app")) ||
+        Bun.which("claude"),
+    ),
+    codex: Boolean(
+      existsSync("/Applications/Codex.app") ||
+        existsSync(join(home, "Applications", "Codex.app")) ||
+        Bun.which("codex"),
+    ),
+    cursor: Boolean(
+      existsSync("/Applications/Cursor.app") ||
+        existsSync(join(home, "Applications", "Cursor.app")) ||
+        Bun.which("cursor"),
+    ),
+  };
 }
 
 async function checkForUpdates(): Promise<DesktopNativeStatus> {

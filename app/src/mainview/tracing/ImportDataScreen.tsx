@@ -1,39 +1,47 @@
 import type { ReactNode } from "react";
-import { Activity, Terminal } from "lucide-react";
+import { Activity, ArrowRight, Terminal } from "lucide-react";
 
 import {
+  Badge,
   Button,
   CommandBlock,
   Dialog,
   DialogClose,
+  cn,
 } from "~/lib/ui";
 
 export function ImportDataScreen({
+  ingestUrl,
   onConnectLocalAgent,
   onImportLangfuse,
+  onImportPhoenix,
 }: {
+  ingestUrl?: string;
   onConnectLocalAgent: () => void;
   onImportLangfuse: () => void;
+  onImportPhoenix: () => void;
 }) {
   return (
     <div className="flex h-full min-h-[calc(100vh-3.5rem)] items-center justify-center overflow-auto p-8">
-      <div className="w-full max-w-4xl">
-        <div className="mb-6">
-          <p className="text-sm font-medium uppercase text-muted-foreground">
+      <div className="w-full max-w-3xl">
+        <div className="mb-8 text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-detail-brand">
             HALO setup
           </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-normal">
-            Import Data
+          <h1 className="mt-3 text-3xl font-semibold tracking-normal">
+            Bring your agent traces into HALO
           </h1>
-          <p className="mt-2 max-w-2xl text-base text-muted-foreground">
-            Connect a local agent or import historical traces to populate this
-            local trace monitor.
+          <p className="mx-auto mt-3 max-w-xl text-base text-muted-foreground">
+            Import historical traces or connect a live agent, then let HALO's
+            analysis find the failures and bottlenecks for you.
           </p>
         </div>
-        <div className="grid gap-5 lg:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2">
           <ImportDataActionCard
+            badge="Recommended"
             description="Bring historical traces from a Langfuse project into this local HALO timeline."
             estimatedTime="Est time: 2-5 minutes"
+            highlighted
             icon={
               <span className="grid h-11 w-11 place-items-center rounded-xl bg-background-muted">
                 <LangfuseLogo className="h-7 w-7" />
@@ -41,6 +49,17 @@ export function ImportDataScreen({
             }
             onClick={onImportLangfuse}
             title="Import from Langfuse"
+          />
+          <ImportDataActionCard
+            description="Bring historical traces from an Arize Phoenix project into this local HALO timeline."
+            estimatedTime="Est time: 2-5 minutes"
+            icon={
+              <span className="grid h-11 w-11 place-items-center rounded-xl bg-background-muted">
+                <PhoenixLogo className="h-7 w-7" />
+              </span>
+            }
+            onClick={onImportPhoenix}
+            title="Import from Phoenix"
           />
           <ImportDataActionCard
             description="Point a Catalyst or OpenTelemetry JSON exporter at HALO and watch traces stream live."
@@ -54,6 +73,21 @@ export function ImportDataScreen({
             title="Connect Local Agent"
           />
         </div>
+        {ingestUrl ? (
+          <div className="mt-8 rounded-xl border border-dashed border-border/60 p-5">
+            <p className="text-sm font-medium">Already have an agent running?</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Point its OTLP exporter at this endpoint and the monitor switches
+              on with the first accepted span.
+            </p>
+            <CommandBlock
+              className="mt-3 bg-background"
+              cmd={ingestUrl}
+              toastDescription="Paste it into your local agent telemetry config."
+              wrap={false}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -138,26 +172,43 @@ export function LocalAgentSetupDialog({
 }
 
 function ImportDataActionCard({
+  badge,
   description,
   estimatedTime,
+  highlighted,
   icon,
   onClick,
   title,
 }: {
+  badge?: string;
   description: string;
   estimatedTime: string;
+  highlighted?: boolean;
   icon: ReactNode;
   onClick: () => void;
   title: string;
 }) {
   return (
     <button
-      className="group flex min-h-48 w-full flex-col rounded-[18px] border border-border/70 bg-card p-5 text-left transition hover:border-border hover:bg-card-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        "group flex min-h-48 w-full flex-col rounded-[18px] border border-border/70 bg-card p-5 text-left transition hover:border-border hover:bg-card-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        highlighted && "border-detail-brand/30 ring-1 ring-detail-brand/20",
+      )}
       onClick={onClick}
       type="button"
     >
-      {icon}
-      <h2 className="mt-5 text-xl font-semibold tracking-normal">{title}</h2>
+      <div className="flex w-full items-start justify-between gap-3">
+        {icon}
+        {badge ? (
+          <Badge size="sm" variant="status-brand">
+            {badge}
+          </Badge>
+        ) : null}
+      </div>
+      <h2 className="mt-5 flex items-center gap-1.5 text-xl font-semibold tracking-normal">
+        {title}
+        <ArrowRight className="h-4 w-4 -translate-x-1 text-muted-foreground opacity-0 transition group-hover:translate-x-0 group-hover:opacity-100" />
+      </h2>
       <p className="mt-2 max-w-xl text-base leading-7 text-muted-foreground">
         {description}
       </p>
@@ -168,7 +219,7 @@ function ImportDataActionCard({
   );
 }
 
-function LangfuseLogo({ className }: { className?: string }) {
+export function LangfuseLogo({ className }: { className?: string }) {
   return (
     <svg
       aria-hidden="true"
@@ -200,6 +251,38 @@ function LangfuseLogo({ className }: { className?: string }) {
       <path
         d="M186.255 130.25C223.755 130.25 255.25 162.25 255.25 162.25C255.25 162.25 246.487 169.155 240.75 173.75C234.775 178.536 225.25 186.25 225.25 186.25C225.25 186.25 208.755 168.75 186.255 168.75C177.028 168.75 165.039 174.292 152.255 185.25C142.391 193.705 132.129 204.216 125.255 217.25C119.31 228.52 116.068 241.802 115.755 255.75C115.361 273.269 121.571 291.634 131.755 306.25C138.58 316.046 146.726 323.418 155.255 329.75C166.323 337.968 177.865 343.75 186.255 343.75C195.217 343.75 203.274 340.635 209.255 337.75C218.755 332.25 226.25 325.75 226.25 325.75L255.75 350.25C255.75 350.25 243.75 362.25 227.255 371.25C216.595 376.507 202.895 381.75 186.255 381.75C169.626 381.75 150.315 372.915 132.255 359.25C120.579 350.416 109.135 339.948 100.255 327.25C85.7005 306.438 78.2004 281.118 78.2502 255.75C78.3008 230.065 86.5823 204.625 101.255 183.75C124.255 153.75 158.273 130.25 186.255 130.25Z"
         fill="#FF5D5F"
+      />
+    </svg>
+  );
+}
+
+/** Stylized phoenix-flame mark for the Arize Phoenix import surfaces. */
+export function PhoenixLogo({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      viewBox="0 0 512 512"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M256 56C256 56 144 140 144 268C144 332 186 388 256 412C326 388 368 332 368 268C368 140 256 56 256 56ZM256 118C282 152 318 206 318 264C318 304 294 338 256 354C218 338 194 304 194 264C194 206 230 152 256 118Z"
+        fill="#F97316"
+      />
+      <path
+        d="M256 188C256 188 208 232 208 286C208 318 227 344 256 356C285 344 304 318 304 286C304 232 256 188 256 188Z"
+        fill="#FBBF24"
+      />
+      <path
+        d="M118 196C92 232 76 274 76 318C76 396 154 452 256 456C190 432 142 392 124 332C110 286 112 238 118 196Z"
+        fill="#F97316"
+        opacity="0.55"
+      />
+      <path
+        d="M394 196C420 232 436 274 436 318C436 396 358 452 256 456C322 432 370 392 388 332C402 286 400 238 394 196Z"
+        fill="#F97316"
+        opacity="0.55"
       />
     </svg>
   );

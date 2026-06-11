@@ -94,6 +94,32 @@ export type HaloRunEvent = {
   payload: Record<string, unknown>;
   runId: string;
   sequence: number;
+  /** Conversation turn the event belongs to; null on pre-multi-turn rows (treated as turn 1). */
+  turnIndex: number | null;
+};
+
+export const HALO_RUN_TURN_STATUSES = [
+  "pending",
+  "streaming",
+  "completed",
+  "incomplete",
+  "failed",
+  "cancelled",
+] as const;
+
+export type HaloRunTurnStatus = (typeof HALO_RUN_TURN_STATUSES)[number];
+export type HaloRunTurnRole = "user" | "assistant";
+
+export type HaloRunTurn = {
+  id: string;
+  content: string;
+  createdAt: string;
+  errorMessage: string | null;
+  finishedAt: string | null;
+  role: HaloRunTurnRole;
+  runId: string;
+  status: HaloRunTurnStatus;
+  turnIndex: number;
 };
 
 export type HaloRunPreview = {

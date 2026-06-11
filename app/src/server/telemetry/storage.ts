@@ -18,7 +18,12 @@ import type {
   TraceSource,
   TraceSortKey,
 } from "./types";
-import { LIVE_WS_URL, LOCAL_TELEMETRY_AUTH, TRACE_INGEST_URL } from "./types";
+import {
+  LIVE_WS_URL,
+  LOCAL_TELEMETRY_AUTH,
+  TRACE_INGEST_URL,
+  TRACE_SOURCES,
+} from "./types";
 
 const SPAN_COLUMNS = [
   "project_id",
@@ -514,7 +519,7 @@ function chooseTraceRoot(
   rows: Array<Record<string, string | number | null>>,
 ): Record<string, string | number | null> | null {
   return (
-    rows.find((row) => sourceMetadataFromRow(row).source !== "langfuse") ??
+    rows.find((row) => sourceMetadataFromRow(row).source === "local") ??
     rows[0] ??
     null
   );
@@ -525,11 +530,11 @@ function traceSourceFromRows(
 ): TraceSourceMetadata {
   const importMetadata = rows
     .map(sourceMetadataFromRow)
-    .find((metadata) => metadata.source === "langfuse");
+    .find((metadata) => metadata.source !== "local");
   const hasLocalRoot = rows.some(
     (row) =>
       String(row.parent_span_id ?? "") === "" &&
-      sourceMetadataFromRow(row).source !== "langfuse",
+      sourceMetadataFromRow(row).source === "local",
   );
   if (importMetadata && !hasLocalRoot) return importMetadata;
   return localTraceSourceMetadata();
@@ -546,7 +551,7 @@ function sourceMetadataFromRow(
   const source = asTraceSource(
     firstString(spanAttrs["halo.source"], resourceAttrs["halo.source"]) ?? "local",
   );
-  if (source !== "langfuse") return localTraceSourceMetadata();
+  if (source === "local") return localTraceSourceMetadata();
 
   return {
     source,
@@ -573,8 +578,13 @@ function sourceMetadataFromRow(
       spanAttrs["halo.source.trace_id"],
       spanAttrs["langfuse.trace.id"],
       spanAttrs["langfuse.project.trace_id"],
+      spanAttrs["phoenix.trace.id"],
     ),
-    sourceUrl: firstString(spanAttrs["halo.source.url"], spanAttrs["langfuse.trace.url"]),
+    sourceUrl: firstString(
+      spanAttrs["halo.source.url"],
+      spanAttrs["langfuse.trace.url"],
+      spanAttrs["phoenix.trace.url"],
+    ),
   };
 }
 
@@ -619,6 +629,7 @@ export function getTelemetryInfo(
   sqlite: Database,
   dbPath: string,
   liveUrl = LIVE_WS_URL,
+  ingestUrl = TRACE_INGEST_URL,
 ) {
   const counts = sqlite
     .query<{ trace_count: number; span_count: number }, []>(
@@ -649,7 +660,7 @@ export function getTelemetryInfo(
 
   return {
     dbPath,
-    ingestUrl: TRACE_INGEST_URL,
+    ingestUrl,
     lastBatch:
       lastBatch == null
         ? null
@@ -2049,7 +2060,9 @@ function asObservationKind(value: string): ObservationKind {
 }
 
 function asTraceSource(value: string): TraceSource {
-  return value === "langfuse" ? "langfuse" : "local";
+  return TRACE_SOURCES.includes(value as TraceSource)
+    ? (value as TraceSource)
+    : "local";
 }
 
 function isoFromMs(ms: number): string {

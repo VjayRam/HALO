@@ -18,6 +18,7 @@ import {
 import { InferenceIcon, ThemeProvider, Toaster } from "~/lib/ui";
 import { trpc } from "~/trpc";
 import { DesktopCommandCenter } from "~/desktop/DesktopCommandCenter";
+import { PrefetchAppData } from "~/components/PrefetchAppData";
 
 import appCss from "../mainview/styles.css?url";
 
@@ -74,7 +75,19 @@ const safeThemeStorage: Storage = {
 };
 
 function RootComponent() {
-  const [queryClient] = useState(() => new QueryClient());
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            // The backend is local SQLite and live subscriptions push updates,
+            // so cached data stays trustworthy — don't refetch-flash on every
+            // mount.
+            staleTime: 30_000,
+          },
+        },
+      }),
+  );
   const [trpcClient] = useState(() => {
     const wsClient = createWSClient({
       lazy: {
@@ -103,6 +116,7 @@ function RootComponent() {
       <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
           <ThemeProvider storage={safeThemeStorage} storageKey="halo-canvas-theme">
+            <PrefetchAppData />
             <StartupTransition>
               <Outlet />
             </StartupTransition>

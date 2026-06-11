@@ -38,3 +38,6 @@ app/*.sqlite
 app/*.sqlite-shm
 app/*.sqlite-wal
 app/*.tsbuildinfo
+
+# Claude Code local tooling config
+.claude/

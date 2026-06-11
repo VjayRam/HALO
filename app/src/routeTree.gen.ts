@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TracesRouteImport } from './routes/traces'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ImportsRouteImport } from './routes/imports'
 import { Route as ImportDataRouteImport } from './routes/import-data'
 import { Route as ComponentsRouteImport } from './routes/components'
 import { Route as AnalysisRouteImport } from './routes/analysis'
@@ -20,6 +21,7 @@ import { Route as ComponentsNavigationRouteImport } from './routes/components.na
 import { Route as ComponentsInputsRouteImport } from './routes/components.inputs'
 import { Route as ComponentsFoundationsRouteImport } from './routes/components.foundations'
 import { Route as ComponentsCustomRouteImport } from './routes/components.custom'
+import { Route as AnalysisRunIdRouteImport } from './routes/analysis_.$runId'
 
 const TracesRoute = TracesRouteImport.update({
   id: '/traces',
@@ -29,6 +31,11 @@ const TracesRoute = TracesRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ImportsRoute = ImportsRouteImport.update({
+  id: '/imports',
+  path: '/imports',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImportDataRoute = ImportDataRouteImport.update({
@@ -76,14 +83,21 @@ const ComponentsCustomRoute = ComponentsCustomRouteImport.update({
   path: '/custom',
   getParentRoute: () => ComponentsRoute,
 } as any)
+const AnalysisRunIdRoute = AnalysisRunIdRouteImport.update({
+  id: '/analysis_/$runId',
+  path: '/analysis/$runId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/analysis': typeof AnalysisRoute
   '/components': typeof ComponentsRouteWithChildren
   '/import-data': typeof ImportDataRoute
+  '/imports': typeof ImportsRoute
   '/settings': typeof SettingsRoute
   '/traces': typeof TracesRoute
+  '/analysis/$runId': typeof AnalysisRunIdRoute
   '/components/custom': typeof ComponentsCustomRoute
   '/components/foundations': typeof ComponentsFoundationsRoute
   '/components/inputs': typeof ComponentsInputsRoute
@@ -95,8 +109,10 @@ export interface FileRoutesByTo {
   '/analysis': typeof AnalysisRoute
   '/components': typeof ComponentsRouteWithChildren
   '/import-data': typeof ImportDataRoute
+  '/imports': typeof ImportsRoute
   '/settings': typeof SettingsRoute
   '/traces': typeof TracesRoute
+  '/analysis/$runId': typeof AnalysisRunIdRoute
   '/components/custom': typeof ComponentsCustomRoute
   '/components/foundations': typeof ComponentsFoundationsRoute
   '/components/inputs': typeof ComponentsInputsRoute
@@ -109,8 +125,10 @@ export interface FileRoutesById {
   '/analysis': typeof AnalysisRoute
   '/components': typeof ComponentsRouteWithChildren
   '/import-data': typeof ImportDataRoute
+  '/imports': typeof ImportsRoute
   '/settings': typeof SettingsRoute
   '/traces': typeof TracesRoute
+  '/analysis_/$runId': typeof AnalysisRunIdRoute
   '/components/custom': typeof ComponentsCustomRoute
   '/components/foundations': typeof ComponentsFoundationsRoute
   '/components/inputs': typeof ComponentsInputsRoute
@@ -124,8 +142,10 @@ export interface FileRouteTypes {
     | '/analysis'
     | '/components'
     | '/import-data'
+    | '/imports'
     | '/settings'
     | '/traces'
+    | '/analysis/$runId'
     | '/components/custom'
     | '/components/foundations'
     | '/components/inputs'
@@ -137,8 +157,10 @@ export interface FileRouteTypes {
     | '/analysis'
     | '/components'
     | '/import-data'
+    | '/imports'
     | '/settings'
     | '/traces'
+    | '/analysis/$runId'
     | '/components/custom'
     | '/components/foundations'
     | '/components/inputs'
@@ -150,8 +172,10 @@ export interface FileRouteTypes {
     | '/analysis'
     | '/components'
     | '/import-data'
+    | '/imports'
     | '/settings'
     | '/traces'
+    | '/analysis_/$runId'
     | '/components/custom'
     | '/components/foundations'
     | '/components/inputs'
@@ -164,8 +188,10 @@ export interface RootRouteChildren {
   AnalysisRoute: typeof AnalysisRoute
   ComponentsRoute: typeof ComponentsRouteWithChildren
   ImportDataRoute: typeof ImportDataRoute
+  ImportsRoute: typeof ImportsRoute
   SettingsRoute: typeof SettingsRoute
   TracesRoute: typeof TracesRoute
+  AnalysisRunIdRoute: typeof AnalysisRunIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -182,6 +208,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/imports': {
+      id: '/imports'
+      path: '/imports'
+      fullPath: '/imports'
+      preLoaderRoute: typeof ImportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/import-data': {
@@ -247,6 +280,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ComponentsCustomRouteImport
       parentRoute: typeof ComponentsRoute
     }
+    '/analysis_/$runId': {
+      id: '/analysis_/$runId'
+      path: '/analysis/$runId'
+      fullPath: '/analysis/$runId'
+      preLoaderRoute: typeof AnalysisRunIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -275,8 +315,10 @@ const rootRouteChildren: RootRouteChildren = {
   AnalysisRoute: AnalysisRoute,
   ComponentsRoute: ComponentsRouteWithChildren,
   ImportDataRoute: ImportDataRoute,
+  ImportsRoute: ImportsRoute,
   SettingsRoute: SettingsRoute,
   TracesRoute: TracesRoute,
+  AnalysisRunIdRoute: AnalysisRunIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

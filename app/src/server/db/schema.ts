@@ -221,6 +221,55 @@ export const langfuseImportJobs = sqliteTable(
   ],
 );
 
+export const phoenixConnections = sqliteTable(
+  "phoenix_connections",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    baseUrl: text("base_url").notNull(),
+    apiKey: text("api_key").notNull().default(""),
+    discoveredProjectsJson: text("discovered_projects_json").notNull().default("[]"),
+    lastStatus: text("last_status").notNull().default("unknown"),
+    lastError: text("last_error"),
+    lastConnectedAt: integer("last_connected_at"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    index("phoenix_connections_updated_at_idx").on(table.updatedAt),
+    uniqueIndex("phoenix_connections_base_url_uidx").on(table.baseUrl),
+  ],
+);
+
+export const phoenixImportJobs = sqliteTable(
+  "phoenix_import_jobs",
+  {
+    id: text("id").primaryKey(),
+    connectionId: text("connection_id").notNull(),
+    bunqueueJobId: text("bunqueue_job_id"),
+    status: text("status").notNull(),
+    filtersJson: text("filters_json").notNull().default("{}"),
+    progress: integer("progress").notNull().default(0),
+    totalTraces: integer("total_traces").notNull().default(0),
+    importedTraces: integer("imported_traces").notNull().default(0),
+    totalObservations: integer("total_observations").notNull().default(0),
+    importedObservations: integer("imported_observations").notNull().default(0),
+    failedTraces: integer("failed_traces").notNull().default(0),
+    errorMessage: text("error_message"),
+    currentTraceId: text("current_trace_id"),
+    currentTraceName: text("current_trace_name"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+    startedAt: integer("started_at"),
+    finishedAt: integer("finished_at"),
+  },
+  (table) => [
+    index("phoenix_import_jobs_connection_idx").on(table.connectionId),
+    index("phoenix_import_jobs_status_idx").on(table.status, table.updatedAt),
+    index("phoenix_import_jobs_updated_at_idx").on(table.updatedAt),
+  ],
+);
+
 export const haloEngineSettings = sqliteTable("halo_engine_settings", {
   id: text("id").primaryKey().default("default"),
   repoUrl: text("repo_url").notNull().default("https://github.com/context-labs/HALO"),
@@ -296,10 +345,29 @@ export const haloRunEvents = sqliteTable(
     eventType: text("event_type").notNull(),
     payloadJson: text("payload_json").notNull(),
     createdAt: integer("created_at").notNull(),
+    turnIndex: integer("turn_index"),
   },
   (table) => [
     index("halo_run_events_run_idx").on(table.runId, table.sequence),
     index("halo_run_events_created_at_idx").on(table.createdAt),
+  ],
+);
+
+export const haloRunTurns = sqliteTable(
+  "halo_run_turns",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    turnIndex: integer("turn_index").notNull(),
+    role: text("role").notNull(),
+    content: text("content").notNull().default(""),
+    status: text("status").notNull().default("completed"),
+    errorMessage: text("error_message"),
+    createdAt: integer("created_at").notNull(),
+    finishedAt: integer("finished_at"),
+  },
+  (table) => [
+    uniqueIndex("halo_run_turns_run_turn_uidx").on(table.runId, table.turnIndex),
   ],
 );
 
@@ -324,6 +392,10 @@ export type LangfuseConnectionRecord = typeof langfuseConnections.$inferSelect;
 export type NewLangfuseConnectionRecord = typeof langfuseConnections.$inferInsert;
 export type LangfuseImportJobRecord = typeof langfuseImportJobs.$inferSelect;
 export type NewLangfuseImportJobRecord = typeof langfuseImportJobs.$inferInsert;
+export type PhoenixConnectionRecord = typeof phoenixConnections.$inferSelect;
+export type NewPhoenixConnectionRecord = typeof phoenixConnections.$inferInsert;
+export type PhoenixImportJobRecord = typeof phoenixImportJobs.$inferSelect;
+export type NewPhoenixImportJobRecord = typeof phoenixImportJobs.$inferInsert;
 export type HaloEngineSettingsRecord = typeof haloEngineSettings.$inferSelect;
 export type HaloModelProviderRecord = typeof haloModelProviders.$inferSelect;
 export type NewHaloModelProviderRecord = typeof haloModelProviders.$inferInsert;

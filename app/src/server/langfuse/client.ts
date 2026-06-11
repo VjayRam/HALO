@@ -1,6 +1,7 @@
 import type {
   LangfuseDiscovery,
   LangfuseFacetValue,
+  LangfuseImportPreview,
   LangfuseObservationLegacyListResponse,
   LangfuseObservationListResponse,
   LangfuseTraceFilters,
@@ -49,6 +50,7 @@ export class LangfuseApiClient {
   async health(signal?: AbortSignal) {
     return this.fetchJson<{ status?: string; version?: string }>("/api/public/health", {
       signal,
+      timeoutMs: 10_000,
       unauthenticated: true,
     });
   }
@@ -117,11 +119,48 @@ export class LangfuseApiClient {
 
   private async fetchJson<T>(
     path: string,
-    options: { signal?: AbortSignal; unauthenticated?: boolean } = {},
+    options: {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      unauthenticated?: boolean;
+    } = {},
+  ): Promise<T> {
+    // Hosted Langfuse instances routinely take several seconds per page on
+    // data-heavy endpoints, and a multi-thousand-trace import makes hundreds
+    // of requests — one slow response must not kill the whole run. Retry
+    // timeouts and transient server errors with backoff before giving up.
+    const maxAttempts = 4;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.fetchJsonOnce(path, options);
+      } catch (error) {
+        const callerAborted = options.signal?.aborted ?? false;
+        const retriable =
+          error instanceof LangfuseApiError &&
+          (error.status === undefined || // timeout / network failure
+            error.status === 408 ||
+            error.status === 429 ||
+            error.status >= 500);
+        if (callerAborted || !retriable || attempt >= maxAttempts) throw error;
+        await Bun.sleep(Math.min(8_000, 500 * 2 ** (attempt - 1)) * (0.5 + Math.random()));
+      }
+    }
+  }
+
+  private async fetchJsonOnce<T>(
+    path: string,
+    options: {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      unauthenticated?: boolean;
+    },
   ): Promise<T> {
     const url = new URL(path, this.baseUrl);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      options.timeoutMs ?? 60_000,
+    );
     const signal = mergeSignals(controller.signal, options.signal);
 
     try {
@@ -183,6 +222,106 @@ export async function discoverLangfuse(input: {
       sampleSize: traces.length,
       totalItems: traceList.meta?.totalItems ?? traces.length,
     },
+  };
+}
+
+const PREVIEW_SAMPLE_LIMIT = 100;
+
+/**
+ * Live counts for the import dialog's select step. Trace totals are exact
+ * (list meta). Span totals come from the legacy observations endpoint, which
+ * only filters by time — exact for time-only selections, extrapolated from
+ * the matching-trace ratio otherwise. Sessions are scaled from the latest
+ * sample page since Langfuse has no distinct-session count API.
+ */
+export async function previewLangfuseImport(input: {
+  baseUrl: string;
+  publicKey: string;
+  secretKey: string;
+  filters?: LangfuseTraceFilters;
+  signal?: AbortSignal;
+}): Promise<LangfuseImportPreview> {
+  const client = new LangfuseApiClient(input);
+  const filters = compactFilters(input.filters);
+  const hasNonTimeFilters = Object.keys(filters).some(
+    (key) => key !== "fromTimestamp" && key !== "toTimestamp",
+  );
+
+  const [latestPage, earliestPage, observationPage, windowTracePage] =
+    await Promise.all([
+      client.listTraces(
+        {
+          fields: "core",
+          filters,
+          limit: PREVIEW_SAMPLE_LIMIT,
+          orderBy: "timestamp.desc",
+          page: 1,
+        },
+        input.signal,
+      ),
+      client.listTraces(
+        { fields: "core", filters, limit: 1, orderBy: "timestamp.asc", page: 1 },
+        input.signal,
+      ),
+      client.listObservations(
+        {
+          fromStartTime: filters.fromTimestamp,
+          limit: 1,
+          page: 1,
+          toStartTime: filters.toTimestamp,
+        },
+        input.signal,
+      ),
+      hasNonTimeFilters
+        ? client.listTraces(
+            {
+              fields: "core",
+              filters: {
+                fromTimestamp: filters.fromTimestamp,
+                toTimestamp: filters.toTimestamp,
+              },
+              limit: 1,
+              page: 1,
+            },
+            input.signal,
+          )
+        : Promise.resolve(null),
+    ]);
+
+  const sample = latestPage.data ?? [];
+  const traces = latestPage.meta?.totalItems ?? sample.length;
+  const observationsInWindow = observationPage.meta?.totalItems ?? 0;
+
+  let observations = observationsInWindow;
+  let observationsEstimated = false;
+  if (hasNonTimeFilters) {
+    const tracesInWindow = windowTracePage?.meta?.totalItems ?? 0;
+    observations =
+      tracesInWindow > 0
+        ? Math.round((observationsInWindow * traces) / tracesInWindow)
+        : 0;
+    observationsEstimated = traces > 0;
+  }
+
+  const distinctSessions = new Set(
+    sample
+      .map((trace) => trace.sessionId)
+      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+  ).size;
+  const sessionsEstimated = traces > sample.length && sample.length > 0;
+  const sessions = sessionsEstimated
+    ? Math.round((distinctSessions * traces) / sample.length)
+    : distinctSessions;
+
+  return {
+    earliestTimestamp: earliestPage.data?.[0]?.timestamp ?? null,
+    latestTimestamp: sample[0]?.timestamp ?? null,
+    observations,
+    observationsEstimated,
+    sampleSize: sample.length,
+    sessions,
+    sessionsEstimated,
+    traces,
   };
 }
 

@@ -50,11 +50,13 @@ const OBSERVATION_FIELDS =
   "core,basic,time,io,metadata,model,usage,prompt,metrics,trace_context";
 const OBSERVATION_PAGE_LIMIT = 1000;
 const OBSERVATION_TRACE_ID_CHUNK_SIZE = 100;
-const OBSERVATION_CHUNK_CONCURRENCY = 8;
+// Hosted Langfuse pages are multi-megabyte and take seconds each; high
+// concurrency just contends with itself until requests start timing out.
+const OBSERVATION_CHUNK_CONCURRENCY = 3;
 const LEGACY_OBSERVATION_PAGE_LIMIT = 100;
-const LEGACY_OBSERVATION_PAGE_CONCURRENCY = 8;
+const LEGACY_OBSERVATION_PAGE_CONCURRENCY = 3;
 const INGEST_BATCH_TRACE_LIMIT = 250;
-const FALLBACK_TRACE_DETAIL_CONCURRENCY = 8;
+const FALLBACK_TRACE_DETAIL_CONCURRENCY = 3;
 const OBSERVATION_EXPAND_METADATA = [
   "function_name",
   "hidden_params",
@@ -237,7 +239,8 @@ async function processImportJob(input: {
           live,
           patch: {
             currentTraceId: null,
-            currentTraceName: "Falling back to observations",
+            currentTraceName:
+              "Using a compatible import path for this Langfuse version…",
             progress: progressFor(counters.processedTraces, counters.totalTraces),
           },
         });
@@ -265,7 +268,7 @@ async function processImportJob(input: {
               live,
               patch: {
                 currentTraceId: null,
-                currentTraceName: "Falling back to trace details",
+                currentTraceName: "Fetching full trace details one by one…",
                 progress: progressFor(
                   counters.processedTraces,
                   counters.totalTraces,
