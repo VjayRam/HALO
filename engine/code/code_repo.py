@@ -5,6 +5,7 @@ import logging
 import shutil
 import subprocess
 import sysconfig
+import threading
 from pathlib import Path
 
 from engine.code.models import (
@@ -70,6 +71,10 @@ _BINARY_SNIFF_BYTES = 8192
 # Per-match line truncation, so one pathological minified line can't flood the
 # model's context with a single result.
 _GREP_LINE_TEXT_CAP_CHARS = 500
+
+# Cap on how much of ripgrep's stderr we retain (for the error message); excess
+# is still drained so the process never blocks, just not kept.
+_GREP_STDERR_CAP_CHARS = 64 * 1024
 
 # read_file caps: per-line and per-call. The response budget mirrors
 # ``_VIEW_TRACE_RESPONSE_BYTES_BUDGET`` in trace_store.py — a comfortable
@@ -214,6 +219,13 @@ class CodeRepo:
         # broad pattern (e.g. ``.``) on a large repo can't buffer megabytes of
         # stdout just to return a capped slice. The extra match only sets
         # ``has_more`` — we don't need the exact total.
+        #
+        # Drain stderr concurrently (in a thread) alongside stdout: we only read
+        # stdout in the loop below, so an unread stderr pipe could fill its OS
+        # buffer (file-open warnings on a large/locked-down repo) and deadlock rg
+        # against our blocked stdout read. The thread keeps reading to EOF;
+        # capture is capped (excess drained but discarded). This mirrors
+        # ripgrep's stderr handling in other harnesses (e.g. OpenCode).
         matches: list[GrepMatchRecord] = []
         has_more = False
         proc = subprocess.Popen(
@@ -223,6 +235,19 @@ class CodeRepo:
             stderr=subprocess.PIPE,
             text=True,
         )
+        stderr_capture: list[str] = []
+
+        def _drain_stderr() -> None:
+            pipe = proc.stderr
+            assert pipe is not None
+            captured = 0
+            for chunk in iter(lambda: pipe.read(8192), ""):
+                if captured < _GREP_STDERR_CAP_CHARS:
+                    stderr_capture.append(chunk)
+                    captured += len(chunk)
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -237,20 +262,21 @@ class CodeRepo:
             if has_more:
                 proc.terminate()
             returncode = proc.wait()
+            stderr_thread.join()
             # rg exit codes: 0 = matches, 1 = no matches, >=2 = error (e.g. bad
             # regex). When we stopped early the process is terminated, so its
             # code is meaningless — only check it on a natural end.
             if not has_more and returncode >= 2:
-                stderr = proc.stderr.read() if proc.stderr else ""
-                raise ValueError(f"grep failed: {stderr.strip()}")
+                raise ValueError(f"grep failed: {''.join(stderr_capture).strip()}")
         finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            stderr_thread.join()
             if proc.stdout is not None:
                 proc.stdout.close()
             if proc.stderr is not None:
                 proc.stderr.close()
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
 
         return GrepMatches(
             matches=matches,
