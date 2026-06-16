@@ -69,6 +69,11 @@ export function normalizeExecutablePath(env: NodeJS.ProcessEnv = process.env) {
     join(homeDir, ".local", "bin"),
     join(homeDir, ".cargo", "bin"),
     join(homeDir, ".pyenv", "shims"),
+    join(homeDir, ".asdf", "shims"),
+    join(homeDir, ".mise", "shims"),
+    join(homeDir, "miniforge3", "bin"),
+    join(homeDir, "miniconda3", "bin"),
+    join(homeDir, "anaconda3", "bin"),
   ];
   env.PATH = uniquePathEntries([
     ...(env.PATH ?? "").split(delimiter),

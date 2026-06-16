@@ -66,6 +66,8 @@ describe("desktop runtime paths", () => {
     expect(entries.filter((entry) => entry === "/usr/bin")).toHaveLength(1);
     expect(entries).toContain("/opt/homebrew/bin");
     expect(entries).toContain("/Users/alice/.local/bin");
+    expect(entries).toContain("/Users/alice/.asdf/shims");
+    expect(entries).toContain("/Users/alice/miniforge3/bin");
     expect(env.PATH).toBe(normalized);
   });
 

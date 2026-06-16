@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { createDatabase, ensureSchema } from "../src/server/db/client";
 import { installOrUpdateHaloEngine, runCommand } from "../src/server/halo/engine";
 import {
@@ -131,5 +131,22 @@ describe("engine install", () => {
     await expect(runCommand(["uv-command-that-does-not-exist-for-halo-test"])).rejects.toThrow(
       "uv-command-that-does-not-exist-for-halo-test was not found",
     );
+  });
+
+  test("command runner respects PATH updates made after startup", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "halo-path-test-"));
+    const commandPath = join(dir, "halo-path-command");
+    const previousPath = process.env.PATH;
+
+    try {
+      writeFileSync(commandPath, "#!/bin/sh\necho late-path-ok\n");
+      chmodSync(commandPath, 0o755);
+      process.env.PATH = [dir, previousPath].filter(Boolean).join(delimiter);
+
+      await expect(runCommand(["halo-path-command"])).resolves.toBe("late-path-ok");
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 });

@@ -173,6 +173,7 @@ export async function runCommand(
     try {
       proc = Bun.spawn(command, {
         cwd: options.cwd,
+        env: process.env,
         stderr: "pipe",
         stdout: "pipe",
         signal: controller.signal,

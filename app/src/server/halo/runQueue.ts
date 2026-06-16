@@ -476,6 +476,7 @@ async function runPythonBridge(input: {
   const runnerPath = resolveHaloRunnerPath();
   const proc = Bun.spawn(["uv", "run", "python", runnerPath, input.configPath], {
     cwd: input.enginePath,
+    env: process.env,
     stderr: "pipe",
     stdout: "pipe",
   });
