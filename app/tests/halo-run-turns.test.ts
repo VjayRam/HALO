@@ -110,6 +110,27 @@ describe("halo run turns", () => {
     expect(messages[2]).toEqual({ content: "What about retries?", role: "user" });
   });
 
+  test("dashboard instruction is only added to engine messages", () => {
+    const { run, sqlite } = setup();
+    createHaloRunTurns(sqlite, run);
+    updateHaloRunTurn(sqlite, getAssistantTurn(sqlite, run.id, 1)!.id, {
+      content: "Answer one.",
+      status: "completed",
+    });
+    const { assistantTurn } = appendHaloRunTurns(sqlite, run, "What about retries?");
+
+    const runnerMessages = buildRunnerMessages(sqlite, run, assistantTurn.turnIndex);
+    const engineMessages = withDashboardRenderingInstruction(runnerMessages);
+    const storedTurns = listHaloRunTurns(sqlite, run);
+
+    expect(runnerMessages[0]).toEqual({ content: "Find the slow spans.", role: "user" });
+    expect(engineMessages[0]?.content).toContain("Dashboard rendering instruction:");
+    expect(engineMessages[0]?.content.endsWith("Find the slow spans.")).toBe(true);
+    expect(engineMessages[2]).toEqual({ content: "What about retries?", role: "user" });
+    expect(storedTurns[0]?.content).toBe("Find the slow spans.");
+    expect(storedTurns[2]?.content).toBe("What about retries?");
+  });
+
   test("legacy runs synthesize a two-turn conversation and persist on append", () => {
     const { run, sqlite } = setup();
     const completed = updateHaloRun(sqlite, run.id, {
