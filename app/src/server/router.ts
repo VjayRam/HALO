@@ -2,6 +2,7 @@ import { TRPCError, initTRPC, tracked } from "@trpc/server";
 import { z } from "zod";
 import type { DatabaseHandle } from "./db/client";
 import { getHaloEngineStatus, installOrUpdateHaloEngine, testHaloProvider } from "./halo/engine";
+import { HALO_REPO_URL } from "./halo/types";
 import type { HaloRunService } from "./halo/runQueue";
 import { ensureHaloReportFile, listHaloRunArtifacts } from "./halo/report";
 import {
@@ -67,6 +68,7 @@ import {
   searchTraces,
 } from "./telemetry/storage";
 import { factoryResetLocalData } from "./telemetry/reset";
+import { getGitHubRepoStars, githubRepoFromUrl } from "./github/client";
 import {
   OBSERVATION_KINDS,
   TRACE_SOURCES,
@@ -238,6 +240,12 @@ export const appRouter = t.router({
     ),
     factoryReset: t.procedure.mutation(({ ctx }) =>
       factoryResetLocalData(ctx.database),
+    ),
+  }),
+
+  github: t.router({
+    stars: t.procedure.query(() =>
+      getGitHubRepoStars(githubRepoFromUrl(HALO_REPO_URL)),
     ),
   }),
 
@@ -938,6 +946,8 @@ export const appRouter = t.router({
           ...pageInput,
           filters: filtersSchema.optional(),
           query: z.string().max(1000),
+          sortBy: traceSortKeySchema.optional(),
+          sortOrder: sortOrderSchema.optional(),
         }),
       )
       .query(({ ctx, input }) =>
@@ -946,6 +956,8 @@ export const appRouter = t.router({
           filters: input.filters,
           limit: input.limit,
           query: input.query,
+          sortBy: input.sortBy,
+          sortOrder: input.sortOrder,
         }),
       ),
 
@@ -1015,6 +1027,8 @@ export const appRouter = t.router({
           ...pageInput,
           filters: filtersSchema.optional(),
           query: z.string().max(1000),
+          sortBy: sessionSortKeySchema.optional(),
+          sortOrder: sortOrderSchema.optional(),
         }),
       )
       .query(({ ctx, input }) =>
@@ -1023,6 +1037,8 @@ export const appRouter = t.router({
           filters: input.filters,
           limit: input.limit,
           query: input.query,
+          sortBy: input.sortBy,
+          sortOrder: input.sortOrder,
         }),
       ),
 

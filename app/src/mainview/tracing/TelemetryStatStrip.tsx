@@ -8,7 +8,7 @@ import {
   Zap,
 } from "lucide-react";
 
-import { StatStrip, StatTile } from "~/components/StatTile";
+import { StatCell, StatStrip } from "~/components/StatTile";
 import { cn } from "~/lib/ui";
 import { compactNumber, formatMoney } from "~/lib/format";
 
@@ -36,33 +36,32 @@ export function TelemetryStatStrip({
   return (
     <StatStrip>
       {mode === "sessions" ? (
-        <StatTile
+        <StatCell
           icon={<MessageSquare />}
           label="Sessions"
           loading={isLoading}
           value={sessionCount ?? 0}
         />
       ) : null}
-      <StatTile
+      <StatCell
         icon={<Activity />}
         label={mode === "sessions" ? "Turns" : "Traces"}
         loading={isLoading}
         value={traceCount}
       />
-      <StatTile
+      <StatCell
         icon={<Layers3 />}
         label="Spans"
         loading={isLoading}
         value={spanCount}
       />
-      <StatTile
+      <StatCell
         icon={<Code2 />}
         label="LLM spans"
         loading={isLoading}
         value={llmSpanCount}
       />
-      <StatTile
-        className={cn(errorCount > 0 && "border-detail-failure/40")}
+      <StatCell
         icon={<XCircle />}
         label="Errors"
         loading={isLoading}
@@ -72,13 +71,13 @@ export function TelemetryStatStrip({
           </span>
         }
       />
-      <StatTile
+      <StatCell
         icon={<Zap />}
         label="Tokens"
         loading={isLoading}
         value={compactNumber(totalTokens)}
       />
-      <StatTile
+      <StatCell
         icon={<CircleDollarSign />}
         label="Cost"
         loading={isLoading}

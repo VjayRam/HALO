@@ -308,17 +308,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           onScroll={trackScrollPosition}
           ref={scrollPaneRef}
         >
-          <div className="mx-auto w-full max-w-3xl flex-1 px-8 pb-6">
-            <div className="py-4">
-              <Link
-                className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-                to="/analysis"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Analysis
-              </Link>
-            </div>
-
+          <div className="mx-auto w-full max-w-3xl flex-1 px-8 pt-12 pb-6">
             {turnsQuery.isLoading ? (
               <div className="grid min-h-40 place-items-center">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -565,7 +555,18 @@ function Shell({
       {/* Fixed-height shell: each pane scrolls itself, the nav rail stays put. */}
       <div className="grid h-full min-h-0 grid-cols-[14rem_minmax(0,1fr)] pt-14">
         <WorkspaceNav active="analysis" />
-        <section className="flex min-h-0 min-w-0 flex-col overflow-hidden">{children}</section>
+        <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
+          <div className="absolute left-8 top-4 z-10">
+            <Link
+              className="group inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+              to="/analysis"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 transition-transform duration-200 group-hover:-translate-x-0.5" />
+              Back
+            </Link>
+          </div>
+          {children}
+        </section>
       </div>
     </main>
   );

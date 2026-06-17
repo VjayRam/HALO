@@ -18,6 +18,7 @@ export function PrefetchAppData() {
 
     // Traces page (both view modes).
     void utils.telemetry.info.prefetch();
+    void utils.github.stars.prefetch();
     void utils.traces.facets.prefetch({ facetIds: TELEMETRY_FACET_IDS });
     void utils.traces.list.prefetch({
       filters,

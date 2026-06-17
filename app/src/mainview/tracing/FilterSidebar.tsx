@@ -2,11 +2,12 @@ import {
   Activity,
   Filter,
   MessageSquare,
+  Search,
 } from "lucide-react";
 
-import { Button, Tabs, TabsList, TabsTrigger } from "~/lib/ui";
+import { Button, Input, Tabs, TabsList, TabsTrigger } from "~/lib/ui";
 import { FilterSelect } from "~/components/FilterSelect";
-import { toFacetOptions, sourceLabel } from "~/lib/format";
+import { toFacetOptions, sourceLabel, type DateRange } from "~/lib/format";
 import type { FacetOption } from "../../server/telemetry/types";
 import type {
   ScopeFilter,
@@ -14,39 +15,48 @@ import type {
   StatusFilter,
   TraceMonitorViewMode,
 } from "./filters";
+import { LiveRangeControl } from "./logTable";
 
 export function FilterSidebar({
   agentName,
+  dateRange,
   description,
   facets,
   modelName,
   onAgentNameChange,
+  onDateRangeChange,
   onModelNameChange,
   onReset,
   onScopeChange,
+  onSearchTextChange,
   onServiceNameChange,
   onSourceChange,
   onStatusChange,
   onViewModeChange,
   scope,
+  searchText,
   serviceName,
   source,
   status,
   viewMode,
 }: {
   agentName: string;
+  dateRange: DateRange;
   description: string;
   facets: Partial<Record<string, FacetOption[]>>;
   modelName: string;
   onAgentNameChange: (value: string) => void;
+  onDateRangeChange: (value: DateRange) => void;
   onModelNameChange: (value: string) => void;
   onReset: () => void;
   onScopeChange: (value: ScopeFilter) => void;
+  onSearchTextChange: (value: string) => void;
   onServiceNameChange: (value: string) => void;
   onSourceChange: (value: SourceFilter) => void;
   onStatusChange: (value: StatusFilter) => void;
   onViewModeChange?: (value: TraceMonitorViewMode) => void;
   scope: ScopeFilter;
+  searchText: string;
   serviceName: string;
   source: SourceFilter;
   status: StatusFilter;
@@ -66,6 +76,28 @@ export function FilterSidebar({
         </div>
 
         <div className="space-y-4">
+          <div className="space-y-2">
+            <span className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
+              Search
+            </span>
+            <Input
+              aria-label={
+                viewMode === "sessions" ? "Search sessions" : "Search traces"
+              }
+              className="h-9"
+              containerClassname="w-full"
+              icon={<Search className="h-4 w-4 text-muted-foreground" />}
+              onChange={(event) =>
+                onSearchTextChange(event.currentTarget.value)
+              }
+              placeholder={
+                viewMode === "sessions"
+                  ? "Search sessions..."
+                  : "Search traces..."
+              }
+              value={searchText}
+            />
+          </div>
           {viewMode && onViewModeChange ? (
             <div className="space-y-2">
               <span className="flex items-center gap-2 text-xs font-semibold uppercase text-muted-foreground">
@@ -98,6 +130,11 @@ export function FilterSidebar({
               </Tabs>
             </div>
           ) : null}
+          <LiveRangeControl
+            className="w-full"
+            dateRange={dateRange}
+            onDateRangeChange={onDateRangeChange}
+          />
           <FilterSelect
             label="Status"
             onChange={(value) => onStatusChange(value as StatusFilter)}

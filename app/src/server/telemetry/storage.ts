@@ -812,9 +812,12 @@ export function listTraces(
   const sortColumn = traceSortColumn(input.sortBy);
   const order = input.sortOrder === "asc" ? "ASC" : "DESC";
   const { conditions, params } = buildTraceWhere(input.filters);
+  const countWhere = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const countParams = { ...params };
   const cursor = decodeCursor(input.cursor);
+  const pageConditions = [...conditions];
   if (cursor) {
-    conditions.push(
+    pageConditions.push(
       input.sortOrder === "asc"
         ? `(${sortColumn}, trace_id) > (:cursorValue, :cursorId)`
         : `(${sortColumn}, trace_id) < (:cursorValue, :cursorId)`,
@@ -822,7 +825,7 @@ export function listTraces(
     params.cursorValue = cursor.value;
     params.cursorId = cursor.id;
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const where = pageConditions.length ? `WHERE ${pageConditions.join(" AND ")}` : "";
   const rows = sqlite
     .query<Record<string, unknown>, QueryParams>(
       `SELECT * FROM trace_summaries
@@ -833,9 +836,9 @@ export function listTraces(
     .all({ ...params, limitPlusOne: limit + 1 });
   const count = sqlite
     .query<{ c: number }, QueryParams>(
-      `SELECT count(*) AS c FROM trace_summaries ${where}`,
+      `SELECT count(*) AS c FROM trace_summaries ${countWhere}`,
     )
-    .get(params);
+    .get(countParams);
   const hasMore = rows.length > limit;
   const trimmed = hasMore ? rows.slice(0, limit) : rows;
   return {
@@ -967,41 +970,103 @@ export function listSpans(
 
 export function searchTraces(
   sqlite: Database,
-  input: { query: string; filters?: TelemetryFilters; limit?: number; cursor?: string | null },
+  input: {
+    query: string;
+    filters?: TelemetryFilters;
+    limit?: number;
+    cursor?: string | null;
+    sortBy?: TraceSortKey;
+    sortOrder?: "asc" | "desc";
+  },
 ) {
   const q = input.query.trim();
   if (!q) {
     return { nextCursor: null, results: [], totalCount: 0, warnings: [] };
   }
 
-  const limit = clampLimit(input.limit);
-  const matchedTraceIds = searchTraceIds(sqlite, q, limit * 10);
-  if (matchedTraceIds.length === 0) {
-    return { nextCursor: null, results: [], totalCount: 0, warnings: [] };
+  const ftsQuery = searchFtsQuery(q);
+  if (ftsQuery) {
+    try {
+      return queryMatchingTraces(sqlite, input, {
+        searchParam: ftsQuery,
+        searchSql:
+          "trace_id IN (SELECT DISTINCT trace_id FROM span_search_fts WHERE span_search_fts MATCH :searchQuery AND project_id = :projectId)",
+      });
+    } catch {
+      // Fall through to LIKE search if the user typed FTS syntax.
+    }
   }
 
-  const { conditions, params } = buildTraceWhere(input.filters);
-  conditions.push(`trace_id IN (${matchedTraceIds.map((_, i) => `:trace${i}`).join(", ")})`);
-  matchedTraceIds.forEach((id, i) => {
-    params[`trace${i}`] = id;
+  return queryMatchingTraces(sqlite, input, {
+    searchParam: `%${q}%`,
+    searchSql:
+      "trace_id IN (SELECT DISTINCT trace_id FROM span_search_fts WHERE content LIKE :searchQuery AND project_id = :projectId)",
   });
+}
+
+function queryMatchingTraces(
+  sqlite: Database,
+  input: {
+    filters?: TelemetryFilters;
+    limit?: number;
+    cursor?: string | null;
+    sortBy?: TraceSortKey;
+    sortOrder?: "asc" | "desc";
+  },
+  search: {
+    searchParam: string;
+    searchSql: string;
+  },
+) {
+  const limit = clampLimit(input.limit);
+  const sortColumn = traceSortColumn(input.sortBy);
+  const order = input.sortOrder === "asc" ? "ASC" : "DESC";
+  const { conditions, params } = buildTraceWhere(input.filters);
+  conditions.push(search.searchSql);
+  params.searchQuery = search.searchParam;
+  const countWhere = `WHERE ${conditions.join(" AND ")}`;
+  const countParams = { ...params };
+  const cursor = decodeCursor(input.cursor);
+  const pageConditions = [...conditions];
+  if (cursor) {
+    pageConditions.push(
+      input.sortOrder === "asc"
+        ? `(${sortColumn}, trace_id) > (:cursorValue, :cursorId)`
+        : `(${sortColumn}, trace_id) < (:cursorValue, :cursorId)`,
+    );
+    params.cursorValue = cursor.value;
+    params.cursorId = cursor.id;
+  }
+  const where = `WHERE ${pageConditions.join(" AND ")}`;
   const rows = sqlite
     .query<Record<string, unknown>, QueryParams>(
       `SELECT * FROM trace_summaries
-       WHERE ${conditions.join(" AND ")}
-       ORDER BY start_time DESC, trace_id DESC
-       LIMIT :limit`,
+       ${where}
+       ORDER BY ${sortColumn} ${order}, trace_id ${order}
+       LIMIT :limitPlusOne`,
     )
-    .all({ ...params, limit });
+    .all({ ...params, limitPlusOne: limit + 1 });
+  const count = sqlite
+    .query<{ c: number }, QueryParams>(
+      `SELECT count(*) AS c FROM trace_summaries ${countWhere}`,
+    )
+    .get(countParams);
+  const hasMore = rows.length > limit;
+  const trimmed = hasMore ? rows.slice(0, limit) : rows;
   return {
-    nextCursor: null,
-    results: rows.map((row) => ({
+    nextCursor: hasMore
+      ? encodeCursor({
+          id: String(trimmed.at(-1)?.trace_id ?? ""),
+          value: trimmed.at(-1)?.[sortColumn] as string | number,
+        })
+      : null,
+    results: trimmed.map((row) => ({
       matchedSpanCount: 1,
       score: 100,
       topMatches: [],
       trace: mapTrace(row),
     })),
-    totalCount: rows.length,
+    totalCount: count?.c ?? 0,
     warnings: [],
   };
 }
@@ -1020,6 +1085,7 @@ export function listSessions(
   const sortColumn = sessionSortColumn(input.sortBy);
   const order = input.sortOrder === "asc" ? "ASC" : "DESC";
   const { conditions, params } = buildSessionWhere(input.filters);
+  const countParams = { ...params };
   const cursor = decodeCursor(input.cursor);
   const cursorSql = cursor
     ? input.sortOrder === "asc"
@@ -1047,7 +1113,7 @@ export function listSessions(
        FROM trace_summaries
        ${where}`,
     )
-    .get(params);
+    .get(countParams);
   const hasMore = rows.length > limit;
   const trimmed = hasMore ? rows.slice(0, limit) : rows;
   return {
@@ -1064,14 +1130,21 @@ export function listSessions(
 
 export function searchSessions(
   sqlite: Database,
-  input: { query: string; filters?: TelemetryFilters; limit?: number; cursor?: string | null },
+  input: {
+    query: string;
+    filters?: TelemetryFilters;
+    limit?: number;
+    cursor?: string | null;
+    sortBy?: SessionSortKey;
+    sortOrder?: "asc" | "desc";
+  },
 ) {
   const q = input.query.trim();
   if (!q) {
     return { nextCursor: null, results: [], totalCount: 0, warnings: [] };
   }
 
-  const matchedSessionIds = searchSessionIds(sqlite, q, clampLimit(input.limit) * 10);
+  const matchedSessionIds = searchSessionIds(sqlite, q, 10_000);
   if (matchedSessionIds.length === 0) {
     return { nextCursor: null, results: [], totalCount: 0, warnings: [] };
   }
@@ -1088,8 +1161,8 @@ export function searchSessions(
     cursor: input.cursor,
     filters,
     limit: input.limit,
-    sortBy: "last_activity",
-    sortOrder: "desc",
+    sortBy: input.sortBy,
+    sortOrder: input.sortOrder,
   });
   return {
     nextCursor: result.nextCursor,
@@ -1242,14 +1315,17 @@ export function getSessionFacets(
   return out;
 }
 
-function searchTraceIds(sqlite: Database, q: string, limit: number): string[] {
-  const ftsQuery = q
+function searchFtsQuery(q: string) {
+  return q
     .split(/\s+/)
     .map((term) => term.replace(/[^a-zA-Z0-9_./:-]/g, ""))
     .filter(Boolean)
     .map((term) => `${term}*`)
     .join(" ");
+}
 
+function searchTraceIds(sqlite: Database, q: string, limit: number): string[] {
+  const ftsQuery = searchFtsQuery(q);
   if (ftsQuery) {
     try {
       return sqlite
@@ -1278,12 +1354,7 @@ function searchTraceIds(sqlite: Database, q: string, limit: number): string[] {
 }
 
 function searchSessionIds(sqlite: Database, q: string, limit: number): string[] {
-  const ftsQuery = q
-    .split(/\s+/)
-    .map((term) => term.replace(/[^a-zA-Z0-9_./:-]/g, ""))
-    .filter(Boolean)
-    .map((term) => `${term}*`)
-    .join(" ");
+  const ftsQuery = searchFtsQuery(q);
   const found = new Set<string>();
 
   if (ftsQuery) {
